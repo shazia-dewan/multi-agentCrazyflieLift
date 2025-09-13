@@ -1,20 +1,20 @@
-# [Project Title]
+# Multi-Agent Reinforcement Learning on Crazyflie Drones
 
 ## 🧑 Student
-- Name: [Your Name]
-- Degree: [Honours / MSc / PhD]
+- Name: Michael O'Sullivan, Aydin `LASTNAME`
+- Degree: Honours BSc Computer Science, `AYDIN DEGREE`
 - Supervisor: Prof. Colin Bellinger
-- Start Date: [YYYY-MM-DD]
+- Start Date: 2025-09-05
 
 ## 🎯 Project Overview
-- **Goal**: One-line summary
-- **Platform**: (Kinova Gen3 / Crazyflie / iRobot Create 3 / Simulation)
-- **Methods**: (Dreamer, TD-MPC2, PPO)
+- **Goal**: Multi-agent reinforcmenet learning applied to crazyflie drones
+- **Platform**: Crazyflie (Simulation and possibly on real drones)
+- **Methods**: Multi-Agent PPO (MAPPO)
 
 ## 📅 Roadmap
 | Date       | Milestone                 | Status  |
 |------------|---------------------------|---------|
-| YYYY-MM-DD | Environment setup         | ✅ Done |
+| 2025-09-12 | Environment setup         | Almost Done 🔄 ✅  |
 | YYYY-MM-DD | Baseline implementation   | 🔄 In progress |
 | YYYY-MM-DD | Domain randomization test | ⏳ Planned |
 
