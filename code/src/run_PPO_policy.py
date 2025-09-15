@@ -38,8 +38,7 @@ if __name__ == "__main__":
     # Training and evaluation env
     env = CrazyflieEnv(
         xml_path=scenePath,
-        num_drones=1,
-        target_pos=np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        num_drones=1
     )
 
     agent = PPOAgent(
@@ -111,9 +110,11 @@ if __name__ == "__main__":
 
 
     # Evaluation / Visualization - run learned policy in the sim
-    obs, _ = env.reset()
     num_sim_steps = 5000
     env.max_steps = num_sim_steps
+    env.evaluation_mode = True
+    env.target_pos = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    obs, _ = env.reset()
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
         for step in range(num_sim_steps):
@@ -121,7 +122,7 @@ if __name__ == "__main__":
             action, _, _ = agent.sample_action(obs)
 
             # Step the environment
-            obs, reward, done, _, _ = env.step(action, log_info = True)
+            obs, reward, done, _, _ = env.step(action)
 
             # Render with sleep for real-time visualization
             viewer.sync()

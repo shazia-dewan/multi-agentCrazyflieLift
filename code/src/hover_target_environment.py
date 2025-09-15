@@ -13,7 +13,8 @@ class CrazyflieEnv(gym.Env):
         xml_path: str, 
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
-        max_steps: int = 200
+        max_steps: int = 100,
+        evaluation_mode: bool = False,
     ):
         """
         Initialize the training environment
@@ -28,12 +29,15 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition (when we have reached max_steps)
+        evaluation_mode : bool
+            Enables evaluation mode (uses target pos, some logging...)
         """
         super().__init__()
 
         # Store config
         self.num_drones = num_drones
         self.target_pos = target_pos
+        self.evaluation_mode = evaluation_mode
 
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(xml_path)
@@ -83,11 +87,21 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Initialize drones at slightly different z heights with velocities of 0
-        for i in range(self.num_drones):
-            base_qpos = i * self.qpos_per_drone
-            self.data.qpos[base_qpos + 2] = 0.1 + 0.01 * np.random.rand()
+        # Set target and drone Z pos to random during training (learn rise / drop)
+        if not self.evaluation_mode:
+            self.target_pos = np.array([0.0, 0.0, np.random.uniform(0.1, 1.0)], dtype=np.float32)
 
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                self.data.qpos[base_qpos + 2] = np.random.uniform(0.1, 1.0)
+        else:
+            # Start drone near the floor during evaluation and use passed target pos
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                self.data.qpos[base_qpos + 2] = 0.1
+
+        # Start drone(s) with 0 velocity
+        for i in range(self.num_drones):
             base_qvel = i * self.qvel_per_drone
             self.data.qvel[base_qvel: base_qvel + self.qvel_per_drone] = 0.0
 
@@ -102,7 +116,7 @@ class CrazyflieEnv(gym.Env):
         return self._get_obs(), {}
 
 
-    def step(self, action: np.ndarray, log_info: bool = False) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
         """
         Take a step (action) and track the observation
 
@@ -110,9 +124,6 @@ class CrazyflieEnv(gym.Env):
         ----------
         action : np.ndarray
             Control action for the drones
-
-        log_info : bool
-            Whether to log info about the step
 
         Returns
         -------
@@ -127,23 +138,8 @@ class CrazyflieEnv(gym.Env):
         target_geom_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "target")
         self.model.geom_pos[target_geom_id] = self.target_pos
 
-
         # Clip action within action space
         action = np.clip(action, self.action_space.low, self.action_space.high)
-
-        # PD control values for thrust + roll + pitch + yaw
-        BASE_THRUST = 0.26487
-        kp_thrust = 0.3
-        kd_thrust = 0.1
-
-        kp_roll = 0.02
-        kd_roll = 0.01
-
-        kp_pitch = 0.02
-        kd_pitch = 0.01
-
-        kp_yaw = 0.3
-        kd_yaw = 0.1
 
         # Termination values
         total_reward = 0.0
@@ -198,7 +194,7 @@ class CrazyflieEnv(gym.Env):
             if self.timestep >= self.max_steps:
                 done = True
 
-            if log_info:
+            if self.evaluation_mode:
                 print(f"distance = {dist_new:.3f}, reward = {total_reward:.4f}")
             
             
