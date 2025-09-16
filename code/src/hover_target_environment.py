@@ -14,7 +14,7 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
         max_steps: int = 100,
-        evaluation_mode: bool = False,
+        debug: bool = False,
     ):
         """
         Initialize the training environment
@@ -28,16 +28,17 @@ class CrazyflieEnv(gym.Env):
         target_pos : float
             Target position the drone will fly to and hover at
         max_steps : int
-            Termination condition (when we have reached max_steps)
-        evaluation_mode : bool
-            Enables evaluation mode (uses target pos, some logging...)
+            Termination condition for episodes (when we have reached max_steps)
+        debug : bool
+            Enables some logging (may remove later)
         """
         super().__init__()
 
         # Store config
         self.num_drones = num_drones
+        assert target_pos[2] > 0.4, "Target position too close to the ground"
         self.target_pos = target_pos
-        self.evaluation_mode = evaluation_mode
+        self.debug = debug
 
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(xml_path)
@@ -87,18 +88,12 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Set target and drone Z pos to random during training (learn rise / drop)
-        if not self.evaluation_mode:
-            self.target_pos = np.array([0.0, 0.0, np.random.uniform(0.1, 1.0)], dtype=np.float32)
-
-            for i in range(self.num_drones):
-                base_qpos = i * self.qpos_per_drone
-                self.data.qpos[base_qpos + 2] = np.random.uniform(0.1, 1.0)
-        else:
-            # Start drone near the floor during evaluation and use passed target pos
-            for i in range(self.num_drones):
-                base_qpos = i * self.qpos_per_drone
-                self.data.qpos[base_qpos + 2] = 0.1
+        # Set drone Z position to random during training (learn rise / drop about target)
+        # NOTE: add flag/option to initialize drone/target position manually (not randomly) during eval
+        self.target_pos = np.array([0.0, 0.0, np.random.uniform(0.1, 1.0)], dtype=np.float32)
+        for i in range(self.num_drones):
+            base_qpos = i * self.qpos_per_drone
+            self.data.qpos[base_qpos + 2] = np.random.uniform(0.1, 1.0)
 
         # Start drone(s) with 0 velocity
         for i in range(self.num_drones):
@@ -142,7 +137,7 @@ class CrazyflieEnv(gym.Env):
         action = np.clip(action, self.action_space.low, self.action_space.high)
 
         # Termination values
-        total_reward = 0.0
+        reward = 0.0
         done = False
 
         # Fill control array
@@ -184,7 +179,7 @@ class CrazyflieEnv(gym.Env):
             # Compare new & old distance to generate a per step reward (-dist_new alone may not signal improvement)
             dist_old = np.linalg.norm(self.prev_pos[i] - self.target_pos)
             dist_new = np.linalg.norm(pos - self.target_pos)
-            total_reward += dist_old - dist_new
+            reward += dist_old - dist_new
             
             # Update previous position for next timestep
             self.prev_pos[i] = pos.copy()
@@ -193,18 +188,13 @@ class CrazyflieEnv(gym.Env):
             self.timestep += 1
             if self.timestep >= self.max_steps:
                 done = True
-
-            if self.evaluation_mode:
-                print(f"distance = {dist_new:.3f}, reward = {total_reward:.4f}")
             
-            
-
         # Apply control and step
         self.data.ctrl[:] = ctrl
         mujoco.mj_step(self.model, self.data)
         obs = self._get_obs()
 
-        return obs, total_reward, done, False, {}
+        return obs, reward, done, False, {}
 
 
     def _get_obs(self) -> np.ndarray:

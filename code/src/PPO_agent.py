@@ -73,7 +73,9 @@ class PPOAgent:
         gamma: float = 0.99,
         clip_eps: float = 0.2,
         update_epochs: int = 2,
-        num_minibatches: int = 2
+        num_minibatches: int = 2,
+        entropy_coefficient: float = 0.8,
+        kl_threshold: float = 0.3
     ):
         """
         Initialize PPO agent.
@@ -94,6 +96,10 @@ class PPOAgent:
             Number of epochs to update policy per batch of rollouts.
         num_minibatches : float
             Number of minibatches for policy updates.
+        entropy_coefficient : float
+            Coefficient used for entropy bonus in policy loss
+        kl_threshold : float
+            Threshold for KL-divergence
         """
         self.buffer = RolloutBuffer()
         self.gamma = gamma
@@ -101,6 +107,8 @@ class PPOAgent:
         self.update_epochs = update_epochs
         self.lr = lr
         self.num_minibatches = num_minibatches
+        self.entropy_coefficient = entropy_coefficient
+        self.kl_threshold = kl_threshold
 
         # Initialize policy/actor and value/critic neural networks
         # Optimizers update network parameters after computing gradients via backpropagation
@@ -109,7 +117,7 @@ class PPOAgent:
         self.policy_optimizer = optim.Adam(self.policy_network.parameters(), lr=lr)
         self.value_optimizer = optim.Adam(self.value_network.parameters(), lr=lr)
 
-    def sample_action(self, obs: np.ndarray) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
+    def sample_action(self, obs: np.ndarray, deterministic: bool = False) -> tuple[np.ndarray, torch.Tensor, torch.Tensor]:
         """
         Sample an action from the policy given an observation.
 
@@ -117,6 +125,8 @@ class PPOAgent:
         ----------
         obs : np.ndarray
             Observation from the environment of shape (observation_dimension).
+        deterministic : bool
+            If true, use the mean action to sample (no variance, greedy)
 
         Returns
         -------
@@ -136,8 +146,11 @@ class PPOAgent:
         mean, std = self.policy_network(obs_tensor)
         dist = Normal(mean, std)
 
-        # Sample action
-        action = dist.sample()
+        # Sample action either deterministically or stochastically
+        if deterministic:
+            action = mean
+        else:
+            action = dist.sample()
 
         # For importance sampling, we need the prob. ratio rt(𝜃) ~ used in clipped surrogate objective
         # Issue: the action space is multidimensional [thrust, roll, pitch, yaw]
@@ -278,7 +291,7 @@ class PPOAgent:
                 kl_mean = torch.distributions.kl_divergence(dist_old, dist).sum(dim=-1).mean()
 
                 # Stop if divergence too high
-                if kl_mean > 0.03:
+                if kl_mean > self.kl_threshold:
                     print(f"Early stopping due to KL divergence: {kl_mean:.4f}")
                     break
 
@@ -300,8 +313,10 @@ class PPOAgent:
                 final_objective = torch.min(unclipped_objective, clipped_objective)
 
                 # Take negative of the average L_CLIP objective because PyTorch optimizers perform gradient descent
-                # Note: Minimizing -(L_CLIP objective) is equivalent to maximizing +(L_CLIP objective)
-                policy_loss = -final_objective.mean()
+                #   Note: Minimizing -(L_CLIP objective) is equivalent to maximizing +(L_CLIP objective)
+                # Add entropy bonus (average across actions & batch)
+                entropy = dist.entropy().sum(dim=-1).mean()
+                policy_loss = -final_objective.mean() - self.entropy_coefficient * entropy
                 
                 # Value function loss (MSE) - view(-1) ensures we have [batch_size]
                 pred_values = self.value_network(obs_batch).view(-1)

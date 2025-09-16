@@ -6,7 +6,40 @@ from hover_target_environment import CrazyflieEnv
 import numpy as np
 import argparse
 
-if __name__ == "__main__":
+def train_PPO(
+    agent: PPOAgent, 
+    env: CrazyflieEnv,
+    total_timesteps: int = 150_000, 
+    num_steps: int = 1500, 
+    print_logs: bool = True,
+    save_model: bool = True,
+    save_path: str = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "models", 
+        f"ppo_model.pt"
+    )
+):
+    """
+    Trains the PPO agent in the environment
+
+    Parameters
+    ----------
+    agent : PPOAgent
+        The PPOAgent
+    env : CrazyflieEnv
+        Training environment
+    total_timesteps : int
+        Total steps for the training
+    num_steps : int
+        Number of steps before a policy update (can span multiple episodes)
+    print_logs : bool
+        If true, prints some logs
+    save_model : bool
+        If true, saves the model to a local .pt file
+    save_path : str
+        Path to save the model
+    """
     # Run script args
     parser = argparse.ArgumentParser(description="Train or load a model")
     parser.add_argument(
@@ -16,35 +49,12 @@ if __name__ == "__main__":
         default=False,
         help="Optionally provide a model path. If omitted, uses default PPO save path."
     )
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="Train the model (if not specified, only loads/runs the model)"
+    )
     args = parser.parse_args()
-
-    # Path to crazyflie scene
-    scenePath = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "assets", 
-        "bitcraze_crazyflie_2", 
-        "scene.xml"
-    )
-
-    # Path to save trained model
-    save_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "models", 
-        f"ppo_model.pt"
-    )
-
-    # Training and evaluation env
-    env = CrazyflieEnv(
-        xml_path=scenePath,
-        num_drones=1
-    )
-
-    agent = PPOAgent(
-        obs_dim = env.observation_space.shape[0],
-        action_dim = env.action_space.shape[0]
-    )
 
     # Load existing PPO model or train new one
     if args.load_model:
@@ -60,10 +70,10 @@ if __name__ == "__main__":
             )
         print(f"Loading model from: {model_path}")
         agent.load(model_path)
-    else:
-        # Number of steps before a policy update (can span multiple episodes)
-        total_timesteps = 150_000
-        num_steps = 1500
+
+    # Allow training existing pre-trained models
+    if args.train or not args.load_model:
+        # Number of policy updates
         num_updates = int(total_timesteps // num_steps)
 
         # Reset environment
@@ -78,7 +88,7 @@ if __name__ == "__main__":
             update_counter += 1
             episode_return = 0
 
-            for step in range(num_steps):
+            for _ in range(num_steps):
                 # Sample action from policy
                 action, log_prob, value = agent.sample_action(obs)
                 next_obs, reward, done, _, _ = env.step(action)
@@ -93,7 +103,8 @@ if __name__ == "__main__":
                 # Reset env if episode ends
                 if done:
                     obs, _ = env.reset()
-                    print(f"Episode {episode_counter} (update {update_counter}/{num_updates}) finished with return: {episode_return:.2f}")
+                    if print_logs:
+                        print(f"Episode {episode_counter} (update {update_counter}/{num_updates}) finished with return: {episode_return:.2f}")
                     episode_counter += 1
                     episode_return = 0
 
@@ -106,28 +117,94 @@ if __name__ == "__main__":
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr_now
                 
-        agent.save(save_path)
+        if save_model:
+            agent.save(save_path)
 
 
-    # Evaluation / Visualization - run learned policy in the sim
-    num_sim_steps = 5000
+def run_PPO(agent: PPOAgent, env: CrazyflieEnv):
+    """
+    Runs the trained PPO agent in the environment and returns total reward.
+
+    Parameters
+    ----------
+    agent : PPOAgent
+        The PPOAgent
+    env : CrazyflieEnv
+        Training environment
+    """
+    obs, _ = env.reset()
+    total_reward = 0.0
+    done = False
+
+    while not done:
+        # Sample action from trained policy
+        action, _, _ = agent.sample_action(obs, deterministic=True)
+
+        # Step the environment
+        obs, reward, done, _, _ = env.step(action)
+
+        # Accumulate total reward
+        total_reward += reward
+
+    return total_reward
+
+
+# Evaluation / Visualization - run learned policy in the sim
+def render_PPO(agent: PPOAgent, env: CrazyflieEnv):
+    """
+    Runs the trained PPO agent in the environment and renders in MuJoCo
+
+    Parameters
+    ----------
+    agent : PPOAgent
+        The PPOAgent
+    env : CrazyflieEnv
+        Training environment
+    """
+    num_sim_steps = 2500
+    total_reward = 0.0
     env.max_steps = num_sim_steps
-    env.evaluation_mode = True
-    env.target_pos = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    env.debug = True
     obs, _ = env.reset()
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
         for step in range(num_sim_steps):
             # Sample action from trained PPO policy
-            action, _, _ = agent.sample_action(obs)
+            # NOT RUNNING DETERMINISTICALLY FOR NOW - Drone seems to fly straight up
+            action, _, _ = agent.sample_action(obs, deterministic=False)
 
             # Step the environment
             obs, reward, done, _, _ = env.step(action)
+            total_reward += reward
 
             # Render with sleep for real-time visualization
             viewer.sync()
             time.sleep(1/60)
 
             if done:
-                print(f"Simulation ended at step {step+1}/{num_sim_steps}")
+                print(f"Simulation ended at step {step+1}/{num_sim_steps} with total reward {total_reward}")
                 break
+
+if __name__ == "__main__":
+    # Path to crazyflie scene
+    scene_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "assets", 
+        "bitcraze_crazyflie_2", 
+        "scene.xml"
+    )
+
+    # Training and evaluation env
+    env = CrazyflieEnv(
+        xml_path = scene_path,
+        num_drones = 1,
+        target_pos = np.array([0.0, 0.0, 0.7], dtype=np.float32),
+        debug=True
+    )
+    agent = PPOAgent(
+        obs_dim = env.observation_space.shape[0],
+        action_dim = env.action_space.shape[0]
+    )
+    train_PPO(agent, env)
+    render_PPO(agent, env)

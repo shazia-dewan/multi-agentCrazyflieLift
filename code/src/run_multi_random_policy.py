@@ -23,19 +23,19 @@ max_steps = 500
 
 for ep in range(num_episodes):
     obs, _ = env.reset()
-    total_reward = 0
+    reward = 0
 
     for step in range(max_steps):
         # We can replace this random sampling with a policy
         action = env.action_space.sample()
         obs, reward, done, _, _ = env.step(action)
-        total_reward += reward
+        reward += reward
 
         if done:
-            print(f"Episode {ep+1} ended after {step+1} steps with reward: {total_reward:.2f}")
+            print(f"Episode {ep+1} ended after {step+1} steps with reward: {reward:.2f}")
             break
     else:
-        print(f"Episode {ep+1} ran all steps ({max_steps}) with reward: {total_reward:.2f}")
+        print(f"Episode {ep+1} ran all steps ({max_steps}) with reward: {reward:.2f}")
 
 env.close()
 
