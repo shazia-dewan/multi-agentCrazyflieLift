@@ -14,9 +14,12 @@
 ## 📅 Roadmap
 | Date       | Milestone                 | Status  |
 |------------|---------------------------|---------|
-| 2025-09-12 | Environment setup         | Almost Done 🔄 ✅  |
-| YYYY-MM-DD | Baseline implementation   | 🔄 In progress |
-| YYYY-MM-DD | Domain randomization test | ⏳ Planned |
+| 2025-09-12 | Environment setup         | Done ✅  |
+| 2025-09-17 | Single-agent baseline     | Done ✅  |
+| YYYY-MM-DD | Single-agent successful target hover and landing   | 🔄 In progress |
+| YYYY-MM-DD | Multi-agent baseline   | ⏳ Planned |
+| YYYY-MM-DD | Multi-agent successful coordination   | ⏳ Planned |
+| YYYY-MM-DD | Testing on real drones   | ⏳ Planned |
 
 ## 📂 Repo Structure
 - docs/ – Reports and slides
