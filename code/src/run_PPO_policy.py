@@ -2,6 +2,7 @@ import os
 import time
 import mujoco.viewer
 from PPO_agent import PPOAgent
+from constants import SCENE_PATH, MODEL_SAVE_PATH
 from hover_target_environment import CrazyflieEnv
 import numpy as np
 import argparse
@@ -13,12 +14,7 @@ def train_PPO(
     num_steps: int = 1500, 
     print_logs: bool = True,
     save_model: bool = True,
-    save_path: str = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "models", 
-        f"ppo_model.pt"
-    )
+    increment_seed: bool = False
 ):
     """
     Trains the PPO agent in the environment
@@ -37,8 +33,8 @@ def train_PPO(
         If true, prints some logs
     save_model : bool
         If true, saves the model to a local .pt file
-    save_path : str
-        Path to save the model
+    increment_seed : bool
+        Whether to use an incrementing seed as opposed to random
     """
     # Run script args
     parser = argparse.ArgumentParser(description="Train or load a model")
@@ -60,7 +56,7 @@ def train_PPO(
     if args.load_model:
         # Use user-provided model if present (as string), otherwise use default stored model
         if args.load_model is True:
-            model_path = save_path 
+            model_path = MODEL_SAVE_PATH 
         else:
             model_path = os.path.join(
                 os.path.dirname(__file__),
@@ -77,15 +73,17 @@ def train_PPO(
         num_updates = int(total_timesteps // num_steps)
 
         # Reset environment
-        obs, _ = env.reset()
+        if increment_seed:
+            seed = 1
+            obs, _ = env.reset(seed)
+        else:
+            obs, _ = env.reset()
 
-        update_counter = 0
         episode_counter = 1
 
         # Iterate over a number of steps rather than episodes which may terminate early
         for update in range(num_updates):
 
-            update_counter += 1
             episode_return = 0
 
             for _ in range(num_steps):
@@ -102,14 +100,19 @@ def train_PPO(
 
                 # Reset env if episode ends
                 if done:
-                    obs, _ = env.reset()
+                    if increment_seed:
+                        seed += 1
+                        obs, _ = env.reset(seed)
+                    else:
+                        obs, _ = env.reset()
                     if print_logs:
-                        print(f"Episode {episode_counter} (update {update_counter}/{num_updates}) finished with return: {episode_return:.2f}")
+                        print(f"Episode {episode_counter} (update {update + 1}/{num_updates}) finished with return: {episode_return:.2f}")
                     episode_counter += 1
                     episode_return = 0
 
-            # Update policy/value networks after every rollout of num_steps
-            agent.update_policy()
+            # Bootstrap truncated episodes
+            _, _, last_value = agent.sample_action(obs)
+            agent.update_policy(last_value)
 
             # Anneal lr param for policy and value optimizers (decreases lr over time based on number of updates)
             lr_now = agent.lr * (1.0 - update / num_updates)
@@ -118,10 +121,10 @@ def train_PPO(
                     param_group["lr"] = lr_now
                 
         if save_model:
-            agent.save(save_path)
+            agent.save(MODEL_SAVE_PATH)
 
 
-def run_PPO(agent: PPOAgent, env: CrazyflieEnv):
+def run_PPO(agent: PPOAgent, env: CrazyflieEnv, env_seed: int = 42, num_steps: int = 2000):
     """
     Runs the trained PPO agent in the environment and returns total reward.
 
@@ -131,8 +134,13 @@ def run_PPO(agent: PPOAgent, env: CrazyflieEnv):
         The PPOAgent
     env : CrazyflieEnv
         Training environment
+    env_seed : int
+        Seed for the environment (applies on reset)
+    num_steps : int
+        Number of steps to run the episode for
     """
-    obs, _ = env.reset()
+    obs, _ = env.reset(env_seed)
+    env.max_steps = num_steps
     total_reward = 0.0
     done = False
 
@@ -165,7 +173,8 @@ def render_PPO(agent: PPOAgent, env: CrazyflieEnv):
     total_reward = 0.0
     env.max_steps = num_sim_steps
     env.debug = True
-    obs, _ = env.reset()
+    env.random_start_pos = False
+    obs, _ = env.reset(42)
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
         for step in range(num_sim_steps):
@@ -186,21 +195,13 @@ def render_PPO(agent: PPOAgent, env: CrazyflieEnv):
                 break
 
 if __name__ == "__main__":
-    # Path to crazyflie scene
-    scene_path = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "assets", 
-        "bitcraze_crazyflie_2", 
-        "scene.xml"
-    )
 
     # Training and evaluation env
     env = CrazyflieEnv(
-        xml_path = scene_path,
+        xml_path = SCENE_PATH,
         num_drones = 1,
-        target_pos = np.array([0.0, 0.0, 0.7], dtype=np.float32),
-        debug=True
+        target_pos = np.array([0.0, 0.0, 0.5], dtype=np.float32),
+        random_start_pos=False
     )
     agent = PPOAgent(
         obs_dim = env.observation_space.shape[0],

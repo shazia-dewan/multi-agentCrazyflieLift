@@ -32,6 +32,22 @@ Run options
   - If no model name is provided, a default name will be used e.g. `ppo_hover`
   - Example: `mjpython run_PPO_policy.py --load_model ppo_model_hover_v1`
 
+
+### `run_PPO_policy_vec.py`
+
+Single agent PPO-Clip policy, trains across multiple parallel environments
+
+Run options (all optional with default values)
+- `--load_model <MODEL_NAME>`
+  - Instead of training a new model, load an existing one
+  - If no model name is provided, a default name will be used e.g. `ppo_hover`
+- `--num_envs <NUM_ENVS>`
+  - Number of parallel environments
+- `--total_timesteps <TOTAL_STEPS>`
+  - Total training time steps
+- `--num_steps <NUM_STEPS>`
+  - Time steps before a policy update
+
 # Environment and Training
 
 Simulation & Physics Engine: **[MuJoCo](https://mujoco.org/)**

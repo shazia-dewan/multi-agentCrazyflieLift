@@ -69,13 +69,13 @@ class PPOAgent:
         self,
         obs_dim: int,
         action_dim: int,
-        lr: float = 1e-3,
+        lr: float = 7e-4,
         gamma: float = 0.99,
         clip_eps: float = 0.2,
-        update_epochs: int = 2,
-        num_minibatches: int = 2,
-        entropy_coefficient: float = 0.8,
-        kl_threshold: float = 0.3
+        update_epochs: int = 1,
+        num_minibatches: int = 1,
+        entropy_coefficient: float = 0.5,
+        kl_threshold: float = 0.5
     ):
         """
         Initialize PPO agent.
@@ -152,12 +152,18 @@ class PPOAgent:
         else:
             action = dist.sample()
 
+        # Squash action onto valid thrust + rotation ranges to avoid clipping later
+        # Thrust on [0, 0.35] and roll, pitch, yaw on [-1, 1]
+        # action[0] = 0.5 * (torch.tanh(action[0]) + 1.0) * 0.35
+        # action[1:] = torch.tanh(action[1:])
+
         # For importance sampling, we need the prob. ratio rt(𝜃) ~ used in clipped surrogate objective
         # Issue: the action space is multidimensional [thrust, roll, pitch, yaw]
         # Solution: Compute log_prob of each action, take sum (joint log_prob of sampled action)
         # Example action: [0.1, 0.2, 0.3, 0.4] --> log_prob = log_prob(thrust = 0.1) + log_prob(roll = 0.2)...
         log_prob = dist.log_prob(action).sum(dim=-1)
 
+        # Critic (value network) value estimate
         value = self.value_network(obs_tensor)
 
 
@@ -218,7 +224,7 @@ class PPOAgent:
 
         return returns
 
-    def update_policy(self) -> None:
+    def update_policy(self, last_value: float = 0.0) -> None:
         """
         Update policy and value networks using the collected rollout buffer
         with multiple epochs, each using minibatches.
@@ -238,7 +244,7 @@ class PPOAgent:
         # Convert buffer data to tensors (this is the info in each transition)
         observations = torch.FloatTensor(np.array(self.buffer.observations))
         actions = torch.FloatTensor(np.array(self.buffer.actions))
-        returns = torch.FloatTensor(np.array(self.compute_returns())).detach()
+        returns = torch.FloatTensor(np.array(self.compute_returns(last_value))).detach()
         old_log_probs = torch.stack(self.buffer.log_probs).detach()
         state_values = torch.stack(self.buffer.state_values).squeeze()
 
@@ -292,7 +298,7 @@ class PPOAgent:
 
                 # Stop if divergence too high
                 if kl_mean > self.kl_threshold:
-                    print(f"Early stopping due to KL divergence: {kl_mean:.4f}")
+                    print(f"Early stopping due to KL divergence: {kl_mean.item():.4f} > {self.kl_threshold}")
                     break
 
 

@@ -13,8 +13,9 @@ class CrazyflieEnv(gym.Env):
         xml_path: str, 
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
-        max_steps: int = 100,
+        max_steps: int = 400,
         debug: bool = False,
+        random_start_pos: bool = True
     ):
         """
         Initialize the training environment
@@ -39,6 +40,7 @@ class CrazyflieEnv(gym.Env):
         assert target_pos[2] > 0.4, "Target position too close to the ground"
         self.target_pos = target_pos
         self.debug = debug
+        self.random_start_pos = random_start_pos
 
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(xml_path)
@@ -88,12 +90,19 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Set drone Z position to random during training (learn rise / drop about target)
-        # NOTE: add flag/option to initialize drone/target position manually (not randomly) during eval
-        self.target_pos = np.array([0.0, 0.0, np.random.uniform(0.1, 1.0)], dtype=np.float32)
-        for i in range(self.num_drones):
-            base_qpos = i * self.qpos_per_drone
-            self.data.qpos[base_qpos + 2] = np.random.uniform(0.1, 1.0)
+        # Option to train with random drone and target position (uses env seed)
+        if self.random_start_pos:
+            self.target_pos = np.array(
+                [0.0, 0.0, self.np_random.uniform(0.1, 5.0)],
+                dtype=np.float32
+            )
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                self.data.qpos[base_qpos + 2] = self.np_random.uniform(0.1, 5.0)
+        else:
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                self.data.qpos[base_qpos + 2] = np.random.uniform(0.05, 0.1)
 
         # Start drone(s) with 0 velocity
         for i in range(self.num_drones):
@@ -138,7 +147,8 @@ class CrazyflieEnv(gym.Env):
 
         # Termination values
         reward = 0.0
-        done = False
+        terminated = False
+        truncated = False
 
         # Fill control array
         ctrl = np.zeros(self.num_drones * self.ctrl_per_drone, dtype=np.float32)
@@ -164,7 +174,11 @@ class CrazyflieEnv(gym.Env):
             yaw   = action[base_ctrl + 3]
 
             # Clip controls to valid ranges (see crazyflie XML actuator)
+            # Base (hover) thrust = 0.26487 for reference
             ctrl[0] = np.clip(thrust, 0, 0.35)
+            # ctrl[1] = np.clip(roll, -1, 1)
+            # ctrl[2] = np.clip(pitch, -1, 1)
+            # ctrl[3] = np.clip(yaw, -1, 1)
             # Not using roll, yaw, or pitch for now (vertical hover test)
             ctrl[1] = np.clip(0, -1, 1)
             ctrl[2] = np.clip(0, -1, 1)
@@ -184,17 +198,20 @@ class CrazyflieEnv(gym.Env):
             # Update previous position for next timestep
             self.prev_pos[i] = pos.copy()
 
-            # Termination
+            # Termination (just truncation in this case, no terminating condition)
             self.timestep += 1
-            if self.timestep >= self.max_steps:
-                done = True
+            terminated = False
+            truncated = self.timestep >= self.max_steps
+
+            if self.debug:
+                print(f"Thrust: {ctrl[0]:.4f}, reward: {reward:.4f}")
             
         # Apply control and step
         self.data.ctrl[:] = ctrl
         mujoco.mj_step(self.model, self.data)
         obs = self._get_obs()
 
-        return obs, reward, done, False, {}
+        return obs, reward, terminated, truncated, {}
 
 
     def _get_obs(self) -> np.ndarray:
@@ -211,7 +228,7 @@ class CrazyflieEnv(gym.Env):
             base_qpos = i * self.qpos_per_drone
             base_qvel = i * self.qvel_per_drone
 
-            # Observation
+            # Observations:
             # qpos stores (position[x, y, z], orientation[qz, qy, qz, q2])
             # qvel stores (velocity[vx, vy, vz], angular velocity[wx, wy, wz])
 

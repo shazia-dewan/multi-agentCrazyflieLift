@@ -1,8 +1,15 @@
 import torch
 import torch.nn as nn
+import numpy as np
+import random
 
 # Note: These networks inherit from PyTorch nn.module and its functionality
 # As such, methods like forward() are called implicitly e.g. with mean, std = self.policy_network(obs_batch)
+
+# For reproducibility, using specific seed for now
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
 
 class PolicyNetwork(nn.Module):
     """
