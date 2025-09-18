@@ -3,6 +3,7 @@ import time
 import argparse
 import numpy as np
 import mujoco.viewer
+import torch
 
 from constants import SCENE_PATH, MODEL_SAVE_PATH
 from PPO_agent_vec import PPOAgentVec
@@ -137,6 +138,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
     parser.add_argument("--total_timesteps", type=int, default=150_000, help="Total timesteps for training")
     parser.add_argument("--num_steps", type=int, default=1500, help="Number of timesteps before policy updates")
+    parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
 
     # Parallel training environments
@@ -148,9 +150,18 @@ if __name__ == "__main__":
 
     # Initialize agent (get obs/action dimensions using the first env)
     example_env = env_fns[0]()
+    if args.device == "cuda" and torch.cuda.is_available():
+        device = "cuda"
+    elif args.device == "mps" and torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        if args.device != "cpu":
+            print("Device not supported, falling back to cpu")
+        device = "cpu"
     agent = PPOAgentVec(
         obs_dim=example_env.observation_space.shape[0],
-        action_dim=example_env.action_space.shape[0]
+        action_dim=example_env.action_space.shape[0],
+        device=device
     )
 
     if not args.load_model:

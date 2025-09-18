@@ -8,7 +8,10 @@ from neural_network import PolicyNetwork, ValueNetwork
 
 # Some context: See Parallel Environments.md
 # <TENSOR>.cpu() restore the info in CPU memory (helpful if using GPU)
-#   Currently we are using CPU, but it's in place if we switch e.g. device="cuda"
+#   If using NVIDIA GPU e.g. device="cuda", install PyTorch with cuda support (see Usage.md)
+# Current setup if suboptimal for full GPU computations (e.g. lots of conversion to CPU storage)
+#   For larger batches or networks, perhaps store rollout buffer directly as torch tensors on GPU
+#   Only call .cpu().numpy() before env.step
 
 class RolloutBufferVec:
     """

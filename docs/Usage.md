@@ -1,6 +1,9 @@
 # Setup
 
 Install dependencies with `pip install -r requirements.txt`
+- Dependencies ran based on `Python 3.11.7`, other version may work
+- If you would like to use an NVIDIA GPU for tensor computations, run the following:
+  - `pip install torch==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121 --upgrade --force-reinstall`
 
 On Windows / Linux, running `<PYTHON_CMD> <RUN_FILE>.py` should work
 - E.g. `python run_PPO_policy.py`
@@ -47,6 +50,8 @@ Run options (all optional with default values)
   - Total training time steps
 - `--num_steps <NUM_STEPS>`
   - Time steps before a policy update
+- `--device <DEVICE>`
+  - Device used for tensor computations in the vectorized PPO agent (e.g. cpu, cuda, mps)
 
 # Environment and Training
 
