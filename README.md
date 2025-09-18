@@ -1,8 +1,8 @@
 # Multi-Agent Reinforcement Learning on Crazyflie Drones
 
 ## 🧑 Student
-- Name: Michael O'Sullivan, Aydin `LASTNAME`
-- Degree: Honours BSc Computer Science, `AYDIN DEGREE`
+- Name: Michael O'Sullivan, Aydin Yalcinkaya
+- Degree: Honours BSc Computer Science, Honours BSc Computer Science
 - Supervisor: Prof. Colin Bellinger
 - Start Date: 2025-09-05
 
