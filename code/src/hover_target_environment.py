@@ -14,8 +14,9 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
         max_steps: int = 400,
+        curriculum: bool = True,
+        max_curriculum_stage: int = 3,
         debug: bool = False,
-        random_start_pos: bool = True
     ):
         """
         Initialize the training environment
@@ -30,17 +31,34 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition for episodes (when we have reached max_steps)
+        curriculum : bool
+            Whether to gradually increase target ranges during training
+        max_curriculum_stage : int
+            Number of stages in the curriculum (target range increases at each stage)
         debug : bool
             Enables some logging (may remove later)
         """
         super().__init__()
 
-        # Store config
+        # 7 qpos, 6 qvel, and 4 action controls per drone
+        self.qpos_per_drone = 7
+        self.qvel_per_drone = 6
+        self.ctrl_per_drone = 4
+
+        # Store user config
         self.num_drones = num_drones
-        assert target_pos[2] > 0.4, "Target position too close to the ground"
+
+        assert target_pos[2] > 0.0, "Target position is under the ground"
         self.target_pos = target_pos
+
         self.debug = debug
-        self.random_start_pos = random_start_pos
+
+        self.curriculum = curriculum
+        self.curriculum_stage = 0
+        self.max_curriculum_stage = max_curriculum_stage
+
+        self.timestep = 0
+        self.max_steps = max_steps
 
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(xml_path)
@@ -48,26 +66,21 @@ class CrazyflieEnv(gym.Env):
 
         # Drone obervation space
         # [pos(3) + quaternion(4) + velocity(3) + angular_velocity(3)] = 13 per drone
-        obs_high = np.inf * np.ones(13 * self.num_drones, dtype=np.float32)
+        # + Prev action [thrust, roll, pitch yaw] = 4 per drone --> Total 17
+        obs_high = np.inf * np.ones(17 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
+
+        # Track previous action for use in observation space
+        self.prev_action = np.zeros(self.num_drones * self.ctrl_per_drone, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
         # thrust + roll + pitch + yaw = 4 per drone
-        # Controls use PD (Proportional-Derivative) control + RL residual
-        act_high = np.tile([0.35, 0.2, 0.2, 0.2], self.num_drones).astype(np.float32)
-        act_low = np.tile([0.0, 0.2, 0.2, 0.2], self.num_drones).astype(np.float32)
+        act_high = np.tile([0.35, 1, 1, 1], self.num_drones).astype(np.float32)
+        act_low = np.tile([0.0, -1, -1, -1], self.num_drones).astype(np.float32)
         self.action_space = spaces.Box(act_low, act_high, dtype=np.float32)
 
         # Viewer
         self.viewer = None
-
-        # 7 qpos, 6 qvel, and 4 action controls per drone
-        self.qpos_per_drone = 7
-        self.qvel_per_drone = 6
-        self.ctrl_per_drone = 4
-
-        self.timestep = 0
-        self.max_steps = max_steps
 
 
     def reset(self, seed: Optional[int] = None) -> tuple[np.ndarray, dict[str, Any]]:
@@ -90,15 +103,31 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Option to train with random drone and target position (uses env seed)
-        if self.random_start_pos:
+        # Curriculum option to train with random drone and target position (uses env seed)
+        if self.curriculum:
+            pos_range = self._get_curriculum_range()
+
+            # Start target at some random [0, 0, Z] based on current curriculum stage
             self.target_pos = np.array(
-                [0.0, 0.0, self.np_random.uniform(0.1, 5.0)],
+                [
+                    0.0,
+                    0.0,
+                    np.clip(self.np_random.uniform(-pos_range, pos_range), 0.1, 2.0)
+                ],
                 dtype=np.float32
             )
+            
+            # Start drone at some random [X, Y, Z] based on current curriculum stage
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
-                self.data.qpos[base_qpos + 2] = self.np_random.uniform(0.1, 5.0)
+
+                start_x = self.np_random.uniform(-pos_range, pos_range)
+                start_y = self.np_random.uniform(-pos_range, pos_range)
+                start_z = np.clip(self.np_random.uniform(-pos_range, pos_range), 0.1, 1.0)
+
+                self.data.qpos[base_qpos + 0] = start_x
+                self.data.qpos[base_qpos + 1] = start_y
+                self.data.qpos[base_qpos + 2] = start_z
         else:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
@@ -116,6 +145,7 @@ class CrazyflieEnv(gym.Env):
             self.prev_pos[i] = self.data.qpos[base_qpos: base_qpos + 3]
 
         self.timestep = 0
+        self.prev_action[:] = 0.0
 
         return self._get_obs(), {}
 
@@ -167,6 +197,7 @@ class CrazyflieEnv(gym.Env):
             #############################################
             # RL Controls
             #############################################
+            base_ctrl = i * self.ctrl_per_drone
 
             thrust = action[base_ctrl + 0]
             roll  = action[base_ctrl + 1]
@@ -174,11 +205,13 @@ class CrazyflieEnv(gym.Env):
             yaw   = action[base_ctrl + 3]
 
             # Clip controls to valid ranges (see crazyflie XML actuator)
-            # Base (hover) thrust = 0.26487 for reference
+            # Base (hovering) thrust = 0.26487 for reference
             ctrl[0] = np.clip(thrust, 0, 0.35)
+
             # ctrl[1] = np.clip(roll, -1, 1)
             # ctrl[2] = np.clip(pitch, -1, 1)
             # ctrl[3] = np.clip(yaw, -1, 1)
+
             # Not using roll, yaw, or pitch for now (vertical hover test)
             ctrl[1] = np.clip(0, -1, 1)
             ctrl[2] = np.clip(0, -1, 1)
@@ -198,13 +231,16 @@ class CrazyflieEnv(gym.Env):
             # Update previous position for next timestep
             self.prev_pos[i] = pos.copy()
 
+            # Update prev action for next timestep (to store in observations)
+            self.prev_action = ctrl.copy()
+
             # Termination (just truncation in this case, no terminating condition)
             self.timestep += 1
             terminated = False
             truncated = self.timestep >= self.max_steps
 
             if self.debug:
-                print(f"Thrust: {ctrl[0]:.4f}, reward: {reward:.4f}")
+                print(f"Thrust: {ctrl[0]:.4f}, Height: {pos[2]:.2f}, Velocity_Z: {vel[2]:.2f}, Reward: {reward:.4f}")
             
         # Apply control and step
         self.data.ctrl[:] = ctrl
@@ -227,10 +263,12 @@ class CrazyflieEnv(gym.Env):
         for i in range(self.num_drones):
             base_qpos = i * self.qpos_per_drone
             base_qvel = i * self.qvel_per_drone
+            base_ctrl = i * self.ctrl_per_drone
 
             # Observations:
             # qpos stores (position[x, y, z], orientation[qz, qy, qz, q2])
             # qvel stores (velocity[vx, vy, vz], angular velocity[wx, wy, wz])
+            # ctrl stores (thrust, roll, pitch yaw)
 
             pos = self.data.qpos[base_qpos: base_qpos + 3]
             quat = self.data.qpos[base_qpos + 3: base_qpos + 7]
@@ -238,8 +276,24 @@ class CrazyflieEnv(gym.Env):
             ang_vel = self.data.qvel[base_qvel + 3: base_qvel + 6]
 
             obs.extend(np.concatenate([pos, quat, vel, ang_vel]))
+            obs.extend(self.prev_action[base_ctrl: base_ctrl + self.ctrl_per_drone])
 
         return np.array(obs, dtype=np.float32)
+
+    def _get_curriculum_range(self):
+        """
+        Get the current target initialization range based on the curriculum stage
+
+        Returns
+        -------
+        Position range d (e.g. +/- d in XY, +d in Z)
+        """
+        # E.g. stage 0 --> 0.25, 1 --> 0.5, 2 --> 0.75...
+        return self.curriculum_stage / 4 + 0.25
+
+    def advance_curriculum(self):
+        if self.curriculum_stage < self.max_curriculum_stage:
+            self.curriculum_stage += 1
 
 
     def render(self) -> None:

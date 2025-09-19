@@ -9,7 +9,7 @@ from neural_network import PolicyNetwork, ValueNetwork
 # Some context: See Parallel Environments.md
 # <TENSOR>.cpu() restore the info in CPU memory (helpful if using GPU)
 #   If using NVIDIA GPU e.g. device="cuda", install PyTorch with cuda support (see Usage.md)
-# Current setup if suboptimal for full GPU computations (e.g. lots of conversion to CPU storage)
+# Current setup is suboptimal for full GPU computations (e.g. lots of conversion to CPU storage)
 #   For larger batches or networks, perhaps store rollout buffer directly as torch tensors on GPU
 #   Only call .cpu().numpy() before env.step
 
@@ -96,13 +96,13 @@ class PPOAgentVec:
         self,
         obs_dim: int,
         action_dim: int,
-        lr: float = 7e-4,
+        lr: float = 1e-3,
         gamma: float = 0.99,
         clip_eps: float = 0.2,
-        update_epochs: int = 4,
-        num_minibatches: int = 4,
-        entropy_coefficient: float = 0.01,
-        kl_threshold: float = 0.5,
+        update_epochs: int = 2,
+        num_minibatches: int = 2,
+        entropy_coefficient: float = 0.3,
+        kl_threshold: float = 0.3,
         device: str = "cpu"
     ):
         """

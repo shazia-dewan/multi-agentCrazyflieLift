@@ -15,19 +15,19 @@ HYPERPARAMETERS_CSV = os.path.join(
     os.path.dirname(__file__),
     "..",
     "test_results",
-    "test_PPO_hyperparameter_results.csv"
+    "PPO_hyperparameter_results.csv"
 )
 TRAINING_STEPS_CSV = os.path.join(
     os.path.dirname(__file__),
     "..",
     "test_results",
-    "test_PPO_training_steps_results.csv"
+    "PPO_training_steps_results.csv"
 )
 ENV_STEPS_CSV = os.path.join(
     os.path.dirname(__file__),
     "..",
     "test_results",
-    "test_PPO_env_steps_results.csv"
+    "PPO_env_steps_results.csv"
 )
 
 
@@ -102,7 +102,7 @@ def check_env_max_steps(args, value_range: list[int]) -> None:
         Used to specific the number of trial runs for each hyperparameter-trained model
 
     value_range : list[int]
-        The list of values to test for the selected hyperparameter
+        The list of values to test for the selected max_steps
     """
     print(f"\nTesting PPO with different max_steps values\n")
     results = []

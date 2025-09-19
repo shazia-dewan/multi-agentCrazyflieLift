@@ -6,14 +6,16 @@ import mujoco.viewer
 import torch
 
 from constants import SCENE_PATH, MODEL_SAVE_PATH
-from PPO_agent_vec import PPOAgentVec
+from PPO_vec_agent import PPOAgentVec
 from hover_target_environment import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+
+MAX_CURRICULUM_STAGE = 3
 
 ####################################
 # Env factory for parallelism
 ####################################
-def make_env(xml_path, rank, seed=0, num_drones=1, random_start_pos=True):
+def make_env(xml_path, rank, seed=0, num_drones=1, max_steps=400):
     """
     Returns a function that creates a new environment instance.
     Used by SubprocVecEnv/DummyVecEnv from SB3.
@@ -22,8 +24,9 @@ def make_env(xml_path, rank, seed=0, num_drones=1, random_start_pos=True):
         env = CrazyflieEnv(
             xml_path=xml_path,
             num_drones=num_drones,
-            target_pos=np.array([0.0, 0.0, 0.5], dtype=np.float32),
-            random_start_pos=random_start_pos
+            curriculum=False,
+            max_curriculum_stage=MAX_CURRICULUM_STAGE,
+            max_steps=max_steps
         )
         env.reset(seed=seed + rank)
         return env
@@ -36,8 +39,8 @@ def make_env(xml_path, rank, seed=0, num_drones=1, random_start_pos=True):
 def train_PPO(
     agent: PPOAgentVec,
     envs,
-    total_timesteps: int = 150_000,
-    num_steps: int = 1500,
+    total_timesteps: int,
+    num_steps: int,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -51,6 +54,8 @@ def train_PPO(
     """
     num_envs = envs.num_envs
     num_updates = total_timesteps // num_steps
+    updates_before_curriculum = num_updates // (MAX_CURRICULUM_STAGE + 1)
+    current_curriculum = 0
 
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
@@ -76,7 +81,7 @@ def train_PPO(
             for i, done in enumerate(dones):
                 if done:
                     if print_logs:
-                        print(f"Update {update + 1}/{num_updates}): env {i + 1} finished an episode with return: {episode_returns[i]:.2f}")
+                        print(f"Update {update + 1}/{num_updates}: env {i + 1} finished an episode with return: {episode_returns[i]:.2f} (curriculum stage {current_curriculum})")
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
@@ -89,7 +94,12 @@ def train_PPO(
         for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_now
-        
+
+        # Advance the curriculum (env target and drone pos ranges) based on #updates
+        # Motive: Start with small ranges (fine control) and move on from there
+        if (update + 1) % updates_before_curriculum == 0 and current_curriculum < MAX_CURRICULUM_STAGE:
+            envs.env_method("advance_curriculum")
+            current_curriculum += 1     
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -98,13 +108,13 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps: int = 2500):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps: int = 3000):
     """
     Render trained PPO in a single environment
     """
     env.max_steps = num_steps
     env.debug = True
-    env.random_start_pos = False
+    env.curriculum = False
     obs, _ = env.reset(seed)
 
     total_reward = 0.0
@@ -136,8 +146,8 @@ if __name__ == "__main__":
         help="Optionally provide a model path. If omitted, uses default PPO save path."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_timesteps", type=int, default=150_000, help="Total timesteps for training")
-    parser.add_argument("--num_steps", type=int, default=1500, help="Number of timesteps before policy updates")
+    parser.add_argument("--total_timesteps", type=int, default=120_000, help="Total timesteps for training")
+    parser.add_argument("--num_steps", type=int, default=1200, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
 
@@ -158,6 +168,7 @@ if __name__ == "__main__":
         if args.device != "cpu":
             print("Device not supported, falling back to cpu")
         device = "cpu"
+
     agent = PPOAgentVec(
         obs_dim=example_env.observation_space.shape[0],
         action_dim=example_env.action_space.shape[0],
@@ -184,7 +195,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 1.5], dtype=np.float32),
-        random_start_pos=False
+        target_pos=np.array([0.0, 0.0, 0.8], dtype=np.float32),
+        curriculum=False
     )
     render_PPO(agent, render_env)
