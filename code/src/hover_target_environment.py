@@ -5,6 +5,8 @@ import mujoco
 from typing import Any, Optional
 
 
+BASE_HOVER_THRUST = 0.26487
+
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
@@ -64,10 +66,11 @@ class CrazyflieEnv(gym.Env):
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
 
-        # Drone obervation space
+        # Drone obervation space: 23 features
         # [pos(3) + quaternion(4) + velocity(3) + angular_velocity(3)] = 13 per drone
-        # + Prev action [thrust, roll, pitch yaw] = 4 per drone --> Total 17
-        obs_high = np.inf * np.ones(17 * self.num_drones, dtype=np.float32)
+        # Prev action [thrust, roll, pitch yaw] = 4 per drone
+        # Engineered features (e.g. relative pos) = 6 per drone
+        obs_high = np.inf * np.ones(23 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Track previous action for use in observation space
@@ -205,7 +208,6 @@ class CrazyflieEnv(gym.Env):
             yaw   = action[base_ctrl + 3]
 
             # Clip controls to valid ranges (see crazyflie XML actuator)
-            # Base (hovering) thrust = 0.26487 for reference
             ctrl[0] = np.clip(thrust, 0, 0.35)
 
             # ctrl[1] = np.clip(roll, -1, 1)
@@ -265,18 +267,34 @@ class CrazyflieEnv(gym.Env):
             base_qvel = i * self.qvel_per_drone
             base_ctrl = i * self.ctrl_per_drone
 
-            # Observations:
+            # Base Observations:
             # qpos stores (position[x, y, z], orientation[qz, qy, qz, q2])
             # qvel stores (velocity[vx, vy, vz], angular velocity[wx, wy, wz])
-            # ctrl stores (thrust, roll, pitch yaw)
+            # prev_action (prev ctrl) stores (thrust, roll, pitch yaw)
+
+            # Engineered Observations:
+            # relative_pos stores [x, y, z] relative to target
+            # distance_to_target is a scalar storing absolute distance
+            # z_error is a scalar for the Z position error between the drone and target
 
             pos = self.data.qpos[base_qpos: base_qpos + 3]
             quat = self.data.qpos[base_qpos + 3: base_qpos + 7]
             vel = self.data.qvel[base_qvel: base_qvel + 3]
             ang_vel = self.data.qvel[base_qvel + 3: base_qvel + 6]
 
-            obs.extend(np.concatenate([pos, quat, vel, ang_vel]))
-            obs.extend(self.prev_action[base_ctrl: base_ctrl + self.ctrl_per_drone])
+            # Engineered features
+            relative_pos = pos - self.target_pos
+            distance_to_target = np.linalg.norm(relative_pos)
+            z_error = pos[2] - self.target_pos[2]
+            normalized_thrust = (self.prev_action[0] / BASE_HOVER_THRUST)
+
+            obs.extend(np.concatenate(
+                [
+                    pos, quat, vel, ang_vel, 
+                    relative_pos, 
+                    [distance_to_target, z_error, normalized_thrust],
+                    self.prev_action[base_ctrl: base_ctrl + self.ctrl_per_drone]
+                ]))
 
         return np.array(obs, dtype=np.float32)
 

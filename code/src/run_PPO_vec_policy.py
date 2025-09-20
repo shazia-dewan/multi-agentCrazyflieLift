@@ -195,7 +195,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 0.8], dtype=np.float32),
+        target_pos=np.array([0.0, 0.0, 3.0], dtype=np.float32),
         curriculum=False
     )
     render_PPO(agent, render_env)

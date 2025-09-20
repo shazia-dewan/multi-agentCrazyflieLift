@@ -1,13 +1,30 @@
-### 1. ppo_model_hover_v1.pt
-- Hover at some [0, 0, Z]
+# Step 1: Initial Testing 
+### Trained on a single environment, basic position and velocity observation space torch.Size([64, 13])
+
+**Model: ppo_model_hover_v1.pt**
+- Goal: Hover at some [0, 0, Z]
 - Somewhat successful, lots of oscillation
 - Implemented with single-env PPO
 
-### 2. ppo_model_hover_v2.pt
+**Model: ppo_model_hover_v2.pt**
 - Same as v1, some parameter differences
 
-### 3. ppo_model_hover_env24.pt
-- Hover at some [0, 0, Z]
+# Step 2: Parallel Training Environments
+
+**Model: ppo_model_hover_env24.pt**
+- Goal: Hover at some [0, 0, Z]
 - Somewhat successful, hovers perfectly at [0, 0, 0.5]
-    - Need to investigate how to adapt for any Z
+    - Need to investigate how to adapt for any Z (hovers at incorrect height or very elliptical)
 - Implemented with multiple-env (parrallel) PPO (24 parallel envs)
+
+# Step 3: Enhance Observation Space
+
+**Model: ppo_model_hover_env24_v2.pt**
+- Goal: Hover at some [0, 0, Z]
+-  Quite successful, hovers well at most [0, 0, Z] (experimentally)
+  - Some minor elliptical behaviour after stabilization (+/- 0.02m)
+  - For high/low Z, hovers slightly below/above the target
+    - Possibly due to training curriculum Z ranges
+- Implemented with multiple-env (parrallel) PPO (24 parallel envs)
+- Added previous action, relative pos to target, Z pos error, and relative thrust (thrust / base hover thrust) to observation space: torch.Size([64, 23])
+- Added training curriculum to environment to gradually increase random drone and target positions on env reset
