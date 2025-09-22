@@ -28,3 +28,5 @@
 - Implemented with multiple-env PPO (24 parallel envs during training)
 - Added previous action, relative pos to target, Z pos error, and relative thrust (thrust / base hover thrust) to observation space: torch.Size([64, 23])
 - Added training curriculum to environment to gradually increase random drone and target positions on env reset
+
+Next: __

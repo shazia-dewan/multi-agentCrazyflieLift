@@ -22,7 +22,8 @@ def make_env(xml_path, rank, seed=0, num_drones=1, max_steps=400):
         env = CrazyflieEnv(
             xml_path=xml_path,
             num_drones=num_drones,
-            max_steps=max_steps
+            max_steps=max_steps,
+            random_initialization=False
         )
         env.reset(seed=seed + rank)
         return env
@@ -96,18 +97,16 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps: int = 2000):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42):
     """
     Render trained PPO in a single environment
     """
-    env.max_steps = num_steps
-    env.debug = True
     obs, _ = env.reset(seed)
 
     total_reward = 0.0
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
-        for _ in range(num_steps):
+        for _ in range(env.max_steps):
             action, _, _ = agent.sample_action(obs, deterministic=True)
             obs, reward, done, _, _ = env.step(action)
             total_reward += reward
@@ -183,8 +182,10 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 2.5], dtype=np.float32),
-        random_initialization=False
+        target_pos=np.array([0.0, 0.0, 3.5], dtype=np.float32),
+        max_steps=2000,
+        random_initialization=False,
+        debug=True
     )
     agent.track_obs_gradient = True
     render_PPO(agent, render_env)
@@ -192,6 +193,7 @@ if __name__ == "__main__":
     # Checking which observations were important to the agent over the render run
     print("\nFeature importance ranking:")
     for name, score in agent.get_obs_importance().items():
-        idx = int(name.split("_")[1])  # extract the number from "obs_15"
+        # Extract obs index e.g. obs_15 --> 15, look it up in env obs map
+        idx = int(name.split("_")[1])
         feature_name = render_env.obs_index_to_name.get(idx, f"obs_{idx}")
         print(f"{feature_name:15s} (idx {idx:2d}): {score:.4f}")
