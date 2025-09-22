@@ -6,6 +6,8 @@ from typing import Any, Optional
 
 
 BASE_HOVER_THRUST = 0.26487
+TRAINING_POS_RANGE = 1.0
+TRAINING_QUAT_RANGE = np.pi / 18
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -16,8 +18,7 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
         max_steps: int = 400,
-        curriculum: bool = True,
-        max_curriculum_stage: int = 3,
+        random_initialization: bool = True,
         debug: bool = False,
     ):
         """
@@ -33,10 +34,8 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition for episodes (when we have reached max_steps)
-        curriculum : bool
-            Whether to gradually increase target ranges during training
-        max_curriculum_stage : int
-            Number of stages in the curriculum (target range increases at each stage)
+        random_initialization : bool
+            Whether to randomly initialize target pos and drone pos/rotation
         debug : bool
             Enables some logging (may remove later)
         """
@@ -49,29 +48,36 @@ class CrazyflieEnv(gym.Env):
 
         # Store user config
         self.num_drones = num_drones
+        self.random_initialization = random_initialization
 
         assert target_pos[2] > 0.0, "Target position is under the ground"
-        self.target_pos = target_pos
+        self.target_pos_param = target_pos
 
+        self.target_pos = np.zeros(3, dtype=np.float32)
         self.debug = debug
-
-        self.curriculum = curriculum
-        self.curriculum_stage = 0
-        self.max_curriculum_stage = max_curriculum_stage
-
-        self.timestep = 0
         self.max_steps = max_steps
 
         # MuJoCo model
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
 
-        # Drone obervation space: 23 features
-        # [pos(3) + quaternion(4) + velocity(3) + angular_velocity(3)] = 13 per drone
-        # Prev action [thrust, roll, pitch yaw] = 4 per drone
-        # Engineered features (e.g. relative pos) = 6 per drone
-        obs_high = np.inf * np.ones(23 * self.num_drones, dtype=np.float32)
+        # Drone obervation space: 36 features (base features and some engineered ones)
+        obs_high = np.inf * np.ones(36 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
+        self.obs_index_to_name = {
+            0: "pos_x", 1: "pos_y", 2: "pos_z",
+            3: "quat_x", 4: "quat_y", 5: "quat_z", 6: "quat_w",
+            7: "vel_x", 8: "vel_y", 9: "vel_z",
+            10: "ang_x", 11: "ang_y", 12: "ang_z",
+            13: "rel_x", 14: "rel_y", 15: "rel_z",
+            16: "norm_x", 17: "norm_y", 18: "norm_z",
+            19: "dist_to_target",
+            20: "err_x", 21: "err_y", 22: "err_z",
+            23: "derivative_err_x", 24: "derivative_err_y", 25: "derivative_err_z",
+            26: "sec_derivative_err_x", 27: "sec_derivative_err_y", 28: "sec_derivative_err_z",
+            29: "integral_err_x", 30: "integral_err_y", 31: "integral_err_z",
+            32: "prev_ctrl_0", 33: "prev_ctrl_1", 34: "prev_ctrl_2", 35: "prev_ctrl_3",
+        }
 
         # Track previous action for use in observation space
         self.prev_action = np.zeros(self.num_drones * self.ctrl_per_drone, dtype=np.float32)
@@ -105,50 +111,64 @@ class CrazyflieEnv(gym.Env):
         super().reset(seed=seed)
 
         mujoco.mj_resetData(self.model, self.data)
-
-        # Curriculum option to train with random drone and target position (uses env seed)
-        if self.curriculum:
-            pos_range = self._get_curriculum_range()
-
-            # Start target at some random [0, 0, Z] based on current curriculum stage
+        
+        # Start target and drone at some random pos [X, Y, Z] (and quat [w, x, y, z] for drone)
+        if self.random_initialization == True:
+            # Start target at some random [X, Y, Z]
             self.target_pos = np.array(
                 [
-                    0.0,
-                    0.0,
-                    np.clip(self.np_random.uniform(-pos_range, pos_range), 0.1, 2.0)
+                    self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2),
+                    self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2),
+                    self.np_random.uniform(0.1, TRAINING_POS_RANGE)
                 ],
                 dtype=np.float32
             )
-            
-            # Start drone at some random [X, Y, Z] based on current curriculum stage
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
-
-                start_x = self.np_random.uniform(-pos_range, pos_range)
-                start_y = self.np_random.uniform(-pos_range, pos_range)
-                start_z = np.clip(self.np_random.uniform(-pos_range, pos_range), 0.1, 1.0)
+                # Random position
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_z =self.np_random.uniform(0.1, TRAINING_POS_RANGE)
 
                 self.data.qpos[base_qpos + 0] = start_x
                 self.data.qpos[base_qpos + 1] = start_y
                 self.data.qpos[base_qpos + 2] = start_z
+
+                # Random rotation axis with small rotation angle
+                axis = self.np_random.normal(size=3)
+                axis /= np.linalg.norm(axis)
+                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+
+                w = np.cos(angle / 2.0)
+                x, y, z = axis * np.sin(angle / 2.0)
+
+                quat = np.array([w, x, y, z], dtype=np.float64)
+                self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
+
+                # Start drone(s) with 0 velocity
+                base_qvel = i * self.qvel_per_drone
+                self.data.qvel[base_qvel: base_qvel + self.qvel_per_drone] = 0.0
         else:
+            self.target_pos = self.target_pos_param
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
-                self.data.qpos[base_qpos + 2] = np.random.uniform(0.05, 0.1)
 
-        # Start drone(s) with 0 velocity
-        for i in range(self.num_drones):
-            base_qvel = i * self.qvel_per_drone
-            self.data.qvel[base_qvel: base_qvel + self.qvel_per_drone] = 0.0
+                # Offset multiple drones e.g. 3 --> -1, 0, 1
+                self.data.qpos[base_qpos + 0] = 2 * i - (self.num_drones // 2)
+                self.data.qpos[base_qpos + 1] = 0
+                self.data.qpos[base_qpos + 2] = 0.05
 
-        # Track previous positions
-        self.prev_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
-        for i in range(self.num_drones):
-            base_qpos = i * self.qpos_per_drone
-            self.prev_pos[i] = self.data.qpos[base_qpos: base_qpos + 3]
 
         self.timestep = 0
+
+        # Set up tracking for previous drone(s) position(s)
+        self.prev_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
+
+        # Reset values used by observation features
         self.prev_action[:] = 0.0
+        self.prev_pos_error = np.zeros(3, dtype=np.float32)
+        self.prev_derivative_error = np.zeros(3, dtype=np.float32)
+        self.integral_pos_error = np.zeros(3, dtype=np.float32)
 
         return self._get_obs(), {}
 
@@ -214,7 +234,7 @@ class CrazyflieEnv(gym.Env):
             # ctrl[2] = np.clip(pitch, -1, 1)
             # ctrl[3] = np.clip(yaw, -1, 1)
 
-            # Not using roll, yaw, or pitch for now (vertical hover test)
+            # TEST: No roll, yaw, or pitch for now (vertical hover test)
             ctrl[1] = np.clip(0, -1, 1)
             ctrl[2] = np.clip(0, -1, 1)
             ctrl[3] = np.clip(0, -1, 1)
@@ -229,7 +249,7 @@ class CrazyflieEnv(gym.Env):
             dist_old = np.linalg.norm(self.prev_pos[i] - self.target_pos)
             dist_new = np.linalg.norm(pos - self.target_pos)
             reward += dist_old - dist_new
-            
+
             # Update previous position for next timestep
             self.prev_pos[i] = pos.copy()
 
@@ -242,7 +262,7 @@ class CrazyflieEnv(gym.Env):
             truncated = self.timestep >= self.max_steps
 
             if self.debug:
-                print(f"Thrust: {ctrl[0]:.4f}, Height: {pos[2]:.2f}, Velocity_Z: {vel[2]:.2f}, Reward: {reward:.4f}")
+                print(f"Ctrl: {[f'{c:.4f}' for c in ctrl]}, Height: {pos[2]:.2f}, Reward: {reward:.4f}")
             
         # Apply control and step
         self.data.ctrl[:] = ctrl
@@ -267,51 +287,75 @@ class CrazyflieEnv(gym.Env):
             base_qvel = i * self.qvel_per_drone
             base_ctrl = i * self.ctrl_per_drone
 
-            # Base Observations:
-            # qpos stores (position[x, y, z], orientation[qz, qy, qz, q2])
-            # qvel stores (velocity[vx, vy, vz], angular velocity[wx, wy, wz])
-            # prev_action (prev ctrl) stores (thrust, roll, pitch yaw)
+            ###########################################
+            # Base Features in Observation Space:
+            ###########################################
 
-            # Engineered Observations:
-            # relative_pos stores [x, y, z] relative to target
-            # distance_to_target is a scalar storing absolute distance
-            # z_error is a scalar for the Z position error between the drone and target
-
+            # position[x, y, z]
             pos = self.data.qpos[base_qpos: base_qpos + 3]
-            quat = self.data.qpos[base_qpos + 3: base_qpos + 7]
-            vel = self.data.qvel[base_qvel: base_qvel + 3]
-            ang_vel = self.data.qvel[base_qvel + 3: base_qvel + 6]
 
-            # Engineered features
+            # quaternion[qx, qy, qz, qw]
+            quat = self.data.qpos[base_qpos + 3 : base_qpos + 7]
+
+            # velocity[vx, vy, vz]
+            vel = self.data.qvel[base_qvel: base_qvel + 3]
+
+            # angular velocity[wx, wy, wz]
+            ang_vel = self.data.qvel[base_qvel + 3 : base_qvel + 6]
+
+            ###############################################################
+            # Engineered Features in Observation Space
+            # Using PPO w/ tanh so trying to normalize features to [-1, 1]
+            ###############################################################
+
+            # relative_pos stores [x, y, z] relative to target
             relative_pos = pos - self.target_pos
+
+            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
+            normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
+
+            # distance_to_target is a scalar storing absolute distance to target
             distance_to_target = np.linalg.norm(relative_pos)
-            z_error = pos[2] - self.target_pos[2]
-            normalized_thrust = (self.prev_action[0] / BASE_HOVER_THRUST)
+
+            # --------------------------------------------------------------------------------
+            # Including Position error, Derivative position error, and Integral position error
+            # Goal: Agent will have the relevant info to learn a PID controller 
+            # --------------------------------------------------------------------------------
+
+            # pos_error is a vector for the XYZ position error between the drone and target
+            pos_error = pos - self.target_pos
+
+            # Derivative position error over one step
+            derivative_error = pos_error - self.prev_pos_error
+            second_derivative_error = derivative_error - self.prev_derivative_error
+            self.prev_pos_error = pos_error.copy()
+            self.prev_derivative_error = derivative_error.copy()
+
+            # Integral position error: exponential moving average to avoid unbounded growth
+            self.integral_pos_error = 0.95 * self.integral_pos_error + 0.05 * pos_error
+            
+            # normalized_prev_ctrl stores normalized previous action controls
+            normalized_prev_ctrl = [
+                2 * (self.prev_action[base_ctrl] / 0.35) - 1,
+                self.prev_action[base_ctrl + 1],
+                self.prev_action[base_ctrl + 2],
+                self.prev_action[base_ctrl + 3]
+            ]
 
             obs.extend(np.concatenate(
                 [
                     pos, quat, vel, ang_vel, 
                     relative_pos, 
-                    [distance_to_target, z_error, normalized_thrust],
-                    self.prev_action[base_ctrl: base_ctrl + self.ctrl_per_drone]
+                    normalized_pos,
+                    np.array([distance_to_target], dtype=np.float32),
+                    pos_error,
+                    derivative_error,
+                    second_derivative_error,
+                    self.integral_pos_error,
+                    normalized_prev_ctrl
                 ]))
 
         return np.array(obs, dtype=np.float32)
-
-    def _get_curriculum_range(self):
-        """
-        Get the current target initialization range based on the curriculum stage
-
-        Returns
-        -------
-        Position range d (e.g. +/- d in XY, +d in Z)
-        """
-        # E.g. stage 0 --> 0.25, 1 --> 0.5, 2 --> 0.75...
-        return self.curriculum_stage / 4 + 0.25
-
-    def advance_curriculum(self):
-        if self.curriculum_stage < self.max_curriculum_stage:
-            self.curriculum_stage += 1
 
 
     def render(self) -> None:

@@ -10,8 +10,6 @@ from PPO_vec_agent import PPOAgentVec
 from hover_target_environment import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
-MAX_CURRICULUM_STAGE = 3
-
 ####################################
 # Env factory for parallelism
 ####################################
@@ -24,8 +22,6 @@ def make_env(xml_path, rank, seed=0, num_drones=1, max_steps=400):
         env = CrazyflieEnv(
             xml_path=xml_path,
             num_drones=num_drones,
-            curriculum=False,
-            max_curriculum_stage=MAX_CURRICULUM_STAGE,
             max_steps=max_steps
         )
         env.reset(seed=seed + rank)
@@ -54,8 +50,6 @@ def train_PPO(
     """
     num_envs = envs.num_envs
     num_updates = total_timesteps // num_steps
-    updates_before_curriculum = num_updates // (MAX_CURRICULUM_STAGE + 1)
-    current_curriculum = 0
 
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
@@ -81,7 +75,7 @@ def train_PPO(
             for i, done in enumerate(dones):
                 if done:
                     if print_logs:
-                        print(f"Update {update + 1}/{num_updates}: env {i + 1} finished an episode with return: {episode_returns[i]:.2f} (curriculum stage {current_curriculum})")
+                        print(f"Update {update + 1}/{num_updates}: env {i + 1} finished an episode with return: {episode_returns[i]:.2f}")
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
@@ -95,12 +89,6 @@ def train_PPO(
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_now
 
-        # Advance the curriculum (env target and drone pos ranges) based on #updates
-        # Motive: Start with small ranges (fine control) and move on from there
-        if (update + 1) % updates_before_curriculum == 0 and current_curriculum < MAX_CURRICULUM_STAGE:
-            envs.env_method("advance_curriculum")
-            current_curriculum += 1     
-
     if save_model:
         agent.save(MODEL_SAVE_PATH)
 
@@ -108,19 +96,18 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps: int = 3000):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps: int = 2000):
     """
     Render trained PPO in a single environment
     """
     env.max_steps = num_steps
     env.debug = True
-    env.curriculum = False
     obs, _ = env.reset(seed)
 
     total_reward = 0.0
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
-        for step in range(num_steps):
+        for _ in range(num_steps):
             action, _, _ = agent.sample_action(obs, deterministic=True)
             obs, reward, done, _, _ = env.step(action)
             total_reward += reward
@@ -129,8 +116,9 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, num_steps:
             time.sleep(1/60)
 
             if done:
-                print(f"Simulation ended at step {step+1}/{num_steps} with total reward {total_reward:.2f}")
                 break
+        print(f"Simulation ended with total reward {total_reward:.2f}")
+
 
 
 ################
@@ -195,7 +183,15 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 3.0], dtype=np.float32),
-        curriculum=False
+        target_pos=np.array([0.0, 0.0, 2.5], dtype=np.float32),
+        random_initialization=False
     )
+    agent.track_obs_gradient = True
     render_PPO(agent, render_env)
+
+    # Checking which observations were important to the agent over the render run
+    print("\nFeature importance ranking:")
+    for name, score in agent.get_obs_importance().items():
+        idx = int(name.split("_")[1])  # extract the number from "obs_15"
+        feature_name = render_env.obs_index_to_name.get(idx, f"obs_{idx}")
+        print(f"{feature_name:15s} (idx {idx:2d}): {score:.4f}")

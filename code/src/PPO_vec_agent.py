@@ -1,3 +1,4 @@
+from typing import DefaultDict
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -103,7 +104,8 @@ class PPOAgentVec:
         num_minibatches: int = 2,
         entropy_coefficient: float = 0.3,
         kl_threshold: float = 0.3,
-        device: str = "cpu"
+        device: str = "cpu",
+        track_obs_gradient: bool = False
     ):
         """
         Initialize values for the vectorized PPO agent
@@ -130,6 +132,8 @@ class PPOAgentVec:
             Threshold for KL-divergence
         device : str
             The device to use for PyTorch computations
+        track_obs_gradient : bool
+            Whether to track the gradient wrt observations (e.g. logs)
         """
         self.buffer = RolloutBufferVec()
         self.gamma = gamma
@@ -140,6 +144,11 @@ class PPOAgentVec:
         self.entropy_coefficient = entropy_coefficient
         self.kl_threshold = kl_threshold
         self.device = torch.device(device)
+
+        self.track_obs_gradient = track_obs_gradient
+        self.obs_names = [f"obs_{i}" for i in range(obs_dim)]
+        self.obs_importance = DefaultDict(float)
+        self.obs_counts = DefaultDict(int)
 
         self.policy_network = PolicyNetwork(obs_dim, action_dim).to(self.device)
         self.value_network = ValueNetwork(obs_dim).to(self.device)
@@ -177,6 +186,8 @@ class PPOAgentVec:
 
         # Obs tensor shape: (num_envs, obs_dim), mean & std shape: (num_envs, action_dim)
         obs_tensor = torch.FloatTensor(obs_arr).to(self.device)
+        if self.track_obs_gradient:
+            obs_tensor.requires_grad_(True)
         mean, std = self.policy_network(obs_tensor)
         dist = Normal(mean, std)
 
@@ -184,6 +195,20 @@ class PPOAgentVec:
             action_tensor = mean
         else:
             action_tensor = dist.rsample()
+
+        # Track importance of each observation for the given action
+        if self.track_obs_gradient:
+            # Observation gradient w.r.t. first action dimension (thrust)
+            # TODO: Test with other controls later when moving to full [X, Y, Z]
+            mean[0,0].backward(retain_graph=True) 
+            gradients = obs_tensor.grad.detach().cpu().numpy()[0]
+
+            for i, g in enumerate(gradients):
+                self.obs_importance[i] += abs(g)
+                self.obs_counts[i] += 1
+
+            # Clear for next step
+            obs_tensor.grad.zero_()
 
         # Sum log_prob per env across action dimensions, log_prob & value shape: (num_envs,)
         log_prob = dist.log_prob(action_tensor).sum(dim=-1)
@@ -430,6 +455,22 @@ class PPOAgentVec:
 
         # Clear buffer after update
         self.buffer.clear()
+
+
+    def get_obs_importance(self):
+        """
+        Returns
+        -------
+        Returns the index and importance for every observation
+        """
+        importance = {}
+        for i in range(len(self.obs_names)):
+            if self.obs_counts[i] > 0:
+                importance[self.obs_names[i]] = self.obs_importance[i] / self.obs_counts[i]
+        
+        # Sort descending (most important first)
+        return dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
+
 
     def save(self, filepath: str):
         """

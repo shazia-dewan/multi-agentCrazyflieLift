@@ -15,7 +15,7 @@
 - Goal: Hover at some [0, 0, Z]
 - Somewhat successful, hovers perfectly at [0, 0, 0.5]
     - Need to investigate how to adapt for any Z (hovers at incorrect height or very elliptical)
-- Implemented with multiple-env (parrallel) PPO (24 parallel envs)
+- Implemented with multiple-env PPO (24 parallel envs during training)
 
 # Step 3: Enhance Observation Space
 
@@ -25,6 +25,6 @@
   - Some minor elliptical behaviour after stabilization (+/- 0.02m)
   - For high/low Z, hovers slightly below/above the target
     - Possibly due to training curriculum Z ranges
-- Implemented with multiple-env (parrallel) PPO (24 parallel envs)
+- Implemented with multiple-env PPO (24 parallel envs during training)
 - Added previous action, relative pos to target, Z pos error, and relative thrust (thrust / base hover thrust) to observation space: torch.Size([64, 23])
 - Added training curriculum to environment to gradually increase random drone and target positions on env reset
