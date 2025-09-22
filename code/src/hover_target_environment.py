@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 
 BASE_HOVER_THRUST = 0.26487
-TRAINING_POS_RANGE = 1.0
+TRAINING_POS_RANGE = 2.0
 TRAINING_QUAT_RANGE = np.pi / 18
 
 class CrazyflieEnv(gym.Env):
@@ -16,8 +16,8 @@ class CrazyflieEnv(gym.Env):
         self, 
         xml_path: str, 
         num_drones: int = 1, 
-        target_pos: np.ndarray = np.array([0.0, 0.0, 0.5], dtype=np.float32),
-        max_steps: int = 400,
+        target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        max_steps: int = 600,
         random_initialization: bool = True,
         debug: bool = False,
     ):
@@ -53,26 +53,29 @@ class CrazyflieEnv(gym.Env):
         # Store user config
         self.num_drones = num_drones
         assert target_pos[2] > 0.0, "Target position is under the ground"
-        self.target_pos_param = target_pos
+        self.target_pos = target_pos
         self.max_steps = max_steps
         self.random_initialization = random_initialization
         self.debug = debug
 
-        # Drone obervation space: 33 features (base features and some engineered ones)
-        obs_high = np.inf * np.ones(33 * self.num_drones, dtype=np.float32)
+        # Drone obervation space: 40 features (base features and some engineered ones)
+        obs_high = np.inf * np.ones(40 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
         self.obs_index_to_name = {
             0: "pos_x", 1: "pos_y", 2: "pos_z",
             3: "quat_w", 4: "quat_x", 5: "quat_y", 6: "quat_z",
             7: "vel_x", 8: "vel_y", 9: "vel_z",
             10: "ang_x", 11: "ang_y", 12: "ang_z",
-            13: "norm_x", 14: "norm_y", 15: "norm_z",
-            16: "dist_to_target",
-            17: "err_x", 18: "err_y", 19: "err_z",
+            13: "pos_norm_x", 14: "pos_norm_y", 15: "pos_norm_z",
+            16: "err_x", 17: "err_y", 18: "err_z",
+            19: "dist_to_target",
             20: "derivative_err_x", 21: "derivative_err_y", 22: "derivative_err_z",
             23: "sec_derivative_err_x", 24: "sec_derivative_err_y", 25: "sec_derivative_err_z",
             26: "integral_err_x", 27: "integral_err_y", 28: "integral_err_z",
             29: "prev_ctrl_0", 30: "prev_ctrl_1", 31: "prev_ctrl_2", 32: "prev_ctrl_3",
+            33: "vel_dist_x", 34: "vel_dist_y", 35: "vel_dist_z", 
+            36: "vel_along_err",
+            27: "vel_norm_x", 38: "vel_norm_y", 39: "vel_norm_z",
         }
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -104,60 +107,6 @@ class CrazyflieEnv(gym.Env):
         super().reset(seed=seed)
 
         mujoco.mj_resetData(self.model, self.data)
-        
-        drone_spacing_x = 0.4
-        drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
-        
-        # Start target and drone at some random pos [X, Y, Z] (and quat [w, x, y, z] for drone)
-        # Currently hover (Z) only
-        if self.random_initialization:
-
-            # Start target at some random [X, Y, Z]
-            self.target_pos = np.array(
-                [
-                    self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2),
-                    self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2),
-                    self.np_random.uniform(0.1, TRAINING_POS_RANGE)
-                ],
-                dtype=np.float32
-            )
-
-            for i in range(self.num_drones):
-                base_qpos = i * self.qpos_per_drone
-                # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
-                start_z =self.np_random.uniform(0.1, TRAINING_POS_RANGE)
-
-                self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
-                self.data.qpos[base_qpos + 1] = start_y
-                self.data.qpos[base_qpos + 2] = start_z
-
-                # Random rotation axis with small rotation angle
-                axis = self.np_random.normal(size=3)
-                axis /= np.linalg.norm(axis)
-                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
-
-                w = np.cos(angle / 2.0)
-                x, y, z = axis * np.sin(angle / 2.0)
-
-                quat = np.array([w, x, y, z], dtype=np.float64)
-                self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
-        else:
-            self.target_pos = self.target_pos_param
-            for i in range(self.num_drones):
-                base_qpos = i * self.qpos_per_drone
-
-                self.data.qpos[base_qpos + 0] = drone_offsets_x[i]
-                self.data.qpos[base_qpos + 1] = 0
-                self.data.qpos[base_qpos + 2] = 0.05 + np.random.uniform(0.05, 0.1)
-
-        for i in range(self.num_drones):
-            # Start drone(s) with 0 velocity
-            base_qvel = i * self.qvel_per_drone
-            self.data.qvel[base_qvel: base_qvel + self.qvel_per_drone] = 0.0
-        
-        self.timestep = 0
 
         # Set up tracking for previous drone(s) e.g. for certain features like derivative
         self.prev_action = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
@@ -165,6 +114,50 @@ class CrazyflieEnv(gym.Env):
         self.prev_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.prev_derivative_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
+        
+        drone_spacing_x = 0.4
+        drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
+        
+        # Start drone at some random pos [X, Y, Z] and quat [w, x, y, z]
+        if self.random_initialization:
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                # Random position
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_z =self.np_random.uniform(0.1, TRAINING_POS_RANGE)
+
+                self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
+                self.data.qpos[base_qpos + 1] = 0.0
+                self.data.qpos[base_qpos + 2] = start_z
+
+                self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
+
+                # Random rotation axis with small rotation angle
+                # axis = self.np_random.normal(size=3)
+                # axis /= np.linalg.norm(axis)
+                # angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+
+                # w = np.cos(angle / 2.0)
+                # x, y, z = axis * np.sin(angle / 2.0)
+
+                # quat = np.array([w, x, y, z], dtype=np.float64)
+                # self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
+        else:
+            for i in range(self.num_drones):
+                base_qpos = i * self.qpos_per_drone
+                self.data.qpos[base_qpos + 0] = drone_offsets_x[i]
+                self.data.qpos[base_qpos + 1] = 0
+                self.data.qpos[base_qpos + 2] = 0.05
+
+                self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
+
+        for i in range(self.num_drones):
+            # Start drone(s) with 0 velocity
+            base_qvel = i * self.qvel_per_drone
+            self.data.qvel[base_qvel: base_qvel + self.qvel_per_drone] = 0.0
+        
+        self.timestep = 0
 
         return self._get_obs(), {}
 
@@ -299,11 +292,11 @@ class CrazyflieEnv(gym.Env):
             # Including derivative and integral info (used in PID controller)
             #################################################################
 
+            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target + scaled to [-1, 1]
+            normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
+
             # pos_error is a vector for the XYZ position error between the drone and target
             pos_error = pos - self.target_pos
-
-            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
-            normalized_pos = 2 * (pos / (np.linalg.norm(self.target_pos) + 1e-9)) - 1
 
             # distance_to_target is a scalar storing absolute distance to target
             distance_to_target = np.linalg.norm(pos_error)
@@ -319,7 +312,7 @@ class CrazyflieEnv(gym.Env):
             self.prev_pos_error[i] = pos_error.copy()
             self.prev_derivative_error[i] = derivative_error.copy()
                         
-            # normalized_prev_ctrl stores normalized previous action controls
+            # normalized_prev_ctrl stores normalized [-1, 1] previous action controls
             normalized_prev_ctrl = [
                 2 * (self.prev_action[i][0] / 0.35) - 1,
                 self.prev_action[i][1],
@@ -327,16 +320,22 @@ class CrazyflieEnv(gym.Env):
                 self.prev_action[i][3]
             ]
 
+            # Extra velocity features
+            vel_over_dist = vel / (distance_to_target + 1e-9)
+            vel_along_error = np.dot(vel, pos_error) / (distance_to_target + 1e-9)
+            vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
+
             obs.extend(np.concatenate(
                 [
                     pos, quat, vel, ang_vel, 
                     normalized_pos,
-                    np.array([distance_to_target], dtype=np.float32),
                     pos_error,
+                    np.array([distance_to_target], dtype=np.float32),
                     derivative_error,
                     second_derivative_error,
                     self.integral_pos_error[i],
-                    normalized_prev_ctrl
+                    normalized_prev_ctrl,
+                    vel_over_dist, np.array([vel_along_error], dtype=np.float32), vel_norm
                 ]))
 
         return np.array(obs, dtype=np.float32)

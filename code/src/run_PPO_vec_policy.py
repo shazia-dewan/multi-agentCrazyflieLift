@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 ####################################
 # Env factory for parallelism
 ####################################
-def make_env(xml_path, rank, seed=0, num_drones=1, max_steps=400):
+def make_env(xml_path, rank, seed=0, num_drones=1):
     """
     Returns a function that creates a new environment instance.
     Used by SubprocVecEnv/DummyVecEnv from SB3.
@@ -21,9 +21,7 @@ def make_env(xml_path, rank, seed=0, num_drones=1, max_steps=400):
     def _init():
         env = CrazyflieEnv(
             xml_path=xml_path,
-            num_drones=num_drones,
-            max_steps=max_steps,
-            random_initialization=False
+            num_drones=num_drones
         )
         env.reset(seed=seed + rank)
         return env
@@ -182,7 +180,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 3.5], dtype=np.float32),
+        target_pos=np.array([0.0, 0.0, 0.2], dtype=np.float32),
         max_steps=2000,
         random_initialization=False,
         debug=True

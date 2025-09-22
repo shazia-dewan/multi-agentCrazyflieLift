@@ -223,4 +223,4 @@ if __name__ == "__main__":
     # Environment variations
     check_env_max_steps(args, [200, 400])
 
-    check_training_schedule(args, [(50_000, 200), (50_000, 400)])
+    # check_training_schedule(args, [(50_000, 200), (50_000, 400)])
