@@ -17,7 +17,7 @@ class CrazyflieEnv(gym.Env):
         xml_path: str, 
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
-        max_steps: int = 600,
+        max_steps: int = 1200,
         random_initialization: bool = True,
         debug: bool = False,
     ):
@@ -58,25 +58,25 @@ class CrazyflieEnv(gym.Env):
         self.random_initialization = random_initialization
         self.debug = debug
 
-        # Drone obervation space: 40 features (base features and some engineered ones)
-        obs_high = np.inf * np.ones(40 * self.num_drones, dtype=np.float32)
-        self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
+        # Index of observations for logging afterwards (e.g. which observations were important)
         self.obs_index_to_name = {
             0: "pos_x", 1: "pos_y", 2: "pos_z",
             3: "quat_w", 4: "quat_x", 5: "quat_y", 6: "quat_z",
             7: "vel_x", 8: "vel_y", 9: "vel_z",
             10: "ang_x", 11: "ang_y", 12: "ang_z",
             13: "pos_norm_x", 14: "pos_norm_y", 15: "pos_norm_z",
-            16: "err_x", 17: "err_y", 18: "err_z",
-            19: "dist_to_target",
-            20: "derivative_err_x", 21: "derivative_err_y", 22: "derivative_err_z",
-            23: "sec_derivative_err_x", 24: "sec_derivative_err_y", 25: "sec_derivative_err_z",
-            26: "integral_err_x", 27: "integral_err_y", 28: "integral_err_z",
-            29: "prev_ctrl_0", 30: "prev_ctrl_1", 31: "prev_ctrl_2", 32: "prev_ctrl_3",
-            33: "vel_dist_x", 34: "vel_dist_y", 35: "vel_dist_z", 
-            36: "vel_along_err",
-            27: "vel_norm_x", 38: "vel_norm_y", 39: "vel_norm_z",
+            16: "pos_err_x", 17: "pos_err_y", 18: "pos_err_z",
+            19: "dist_to_target", 20: "squared_dist_to_target",
+            21: "derivative_err_x", 22: "derivative_err_y", 23: "derivative_err_z",
+            24: "sec_derivative_err_x", 25: "sec_derivative_err_y", 26: "sec_derivative_err_z",
+            27: "integral_err_x", 28: "integral_err_y", 29: "integral_err_z",
+            30: "prev_ctrl_0", 31: "prev_ctrl_1", 32: "prev_ctrl_2", 33: "prev_ctrl_3",
+            34: "vel_dist_x", 35: "vel_dist_y", 36: "vel_dist_z", 
+            37: "vel_along_err",
+            38: "vel_norm_x", 39: "vel_norm_y", 40: "vel_norm_z",
         }
+        obs_high = np.inf * np.ones(41 * self.num_drones, dtype=np.float32)
+        self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
         # thrust + roll + pitch + yaw = 4 per drone
@@ -298,10 +298,11 @@ class CrazyflieEnv(gym.Env):
             # pos_error is a vector for the XYZ position error between the drone and target
             pos_error = pos - self.target_pos
 
-            # distance_to_target is a scalar storing absolute distance to target
+            # distance_to_target and squared_distance_to_target are scalars storing abs/squared distance to target
             distance_to_target = np.linalg.norm(pos_error)
+            squared_distance_to_target = distance_to_target ** 2
 
-            # 1st and 2nd derivative position error over one step ~ velocity and acceleration
+            # 1st and 2nd derivative position error over one step ~ velocity and acceleration of error
             derivative_error = pos_error - self.prev_pos_error[i]
             second_derivative_error = derivative_error - self.prev_derivative_error[i]
 
@@ -320,9 +321,14 @@ class CrazyflieEnv(gym.Env):
                 self.prev_action[i][3]
             ]
 
-            # Extra velocity features
+            # Velocity over distance
             vel_over_dist = vel / (distance_to_target + 1e-9)
+
+            # Projection of velocity along the error vector
+            # scalar value: moving toward (+) or away (-) from the target, and how fast relative to the gap
             vel_along_error = np.dot(vel, pos_error) / (distance_to_target + 1e-9)
+
+            # Normalized velocity
             vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
 
             obs.extend(np.concatenate(
@@ -330,12 +336,12 @@ class CrazyflieEnv(gym.Env):
                     pos, quat, vel, ang_vel, 
                     normalized_pos,
                     pos_error,
-                    np.array([distance_to_target], dtype=np.float32),
+                    np.array([distance_to_target, squared_distance_to_target], dtype=np.float32),
                     derivative_error,
                     second_derivative_error,
                     self.integral_pos_error[i],
                     normalized_prev_ctrl,
-                    vel_over_dist, np.array([vel_along_error], dtype=np.float32), vel_norm
+                    vel_over_dist, np.array([vel_along_error], dtype=np.float32), vel_norm,
                 ]))
 
         return np.array(obs, dtype=np.float32)
