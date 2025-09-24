@@ -395,7 +395,7 @@ class PPOAgentVec:
                 returns_batch = returns[batch_idx]
                 advantages_batch = advantages[batch_idx]
 
-                # Compute current policy distribution for minibatch
+                # Compute current policy distribution for minibatch (forward pass)
                 mean, std = self.policy_network(obs_batch)
                 dist = Normal(mean, std)
                 log_probs = dist.log_prob(actions_batch).sum(dim=-1)
@@ -437,6 +437,7 @@ class PPOAgentVec:
 
                 ######################################
                 # Gradient descent and backpropagation
+                # General idea: https://www.geeksforgeeks.org/machine-learning/backpropagation-in-neural-network/
                 ######################################
 
                 # Update policy network: Clear gradients and backpropagate

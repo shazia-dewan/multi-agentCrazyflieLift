@@ -25,17 +25,6 @@ Generated models are stored under `.../models`
 - Outputs a model with a default name e.g. `ppo_model.pt` after each training + evaluation run
 - Rename / move / copy the output model if you would like to retain it (so it is not overwritten on the next run)
 
-### `run_PPO_policy.py`
-
-Single agent PPO-Clip policy
-
-Run options
-- `--load_model <MODEL_NAME>`
-  - Instead of training a new model, load an existing one
-  - If no model name is provided, a default name will be used e.g. `ppo_hover`
-  - Example: `mjpython run_PPO_policy.py --load_model ppo_model_hover_v1`
-
-
 ### `run_PPO_policy_vec.py`
 
 Single agent PPO-Clip policy, trains across multiple parallel environments
