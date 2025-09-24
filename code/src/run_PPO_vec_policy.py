@@ -180,8 +180,8 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 0.5], dtype=np.float32),
-        max_steps=2000,
+        target_pos=np.array([0.25, 0.25, 1.0], dtype=np.float32),
+        max_steps=4000,
         random_initialization=False,
         debug=True
     )
