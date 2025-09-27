@@ -4,6 +4,8 @@ import numpy as np
 import mujoco
 from typing import Any, Optional
 
+from util import quat_to_rotation_matrix
+
 
 BASE_HOVER_THRUST = 0.26487
 DRONE_TILT_EPISLON = np.deg2rad(10)
@@ -73,7 +75,7 @@ class CrazyflieEnv(gym.Env):
             21: "derivative_pos_err_x", 22: "derivative_pos_err_y", 23: "derivative_pos_err_z",
             24: "sec_derivative_pos_err_x", 25: "sec_derivative_pos_err_y", 26: "sec_derivative_pos_err_z",
             27: "integral_pos_err_x", 28: "integral_pos_err_y", 29: "integral_pos_err_z",
-            30: "prev_ctrl_0", 31: "prev_ctrl_1", 32: "prev_ctrl_2", 33: "prev_ctrl_3",
+            30: "prev_ctrl_thrust", 31: "prev_ctrl_roll", 32: "prev_ctrl_pitch", 33: "prev_ctrl_yaw",
             34: "vel_dist_x", 35: "vel_dist_y", 36: "vel_dist_z", 
             37: "vel_along_err",
             38: "vel_norm_x", 39: "vel_norm_y", 40: "vel_norm_z",
@@ -82,8 +84,10 @@ class CrazyflieEnv(gym.Env):
             44: "quat_err_x", 45: "quat_err_y", 46: "quat_err_z",
             47: "derivative_quat_err_x", 48: "derivative_quat_err_y", 49: "derivative_quat_err_z",
             50: "integral_quat_err_x", 51: "integral_quat_err_y", 52: "integral_quat_err_z",
+            53: "vel_rotation_x", 54: "vel_rotation_y",
+            55: "pos_error_rotation_x", 56: "pos_error_rotation_y"
         }
-        obs_high = np.inf * np.ones(53 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(57 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -136,26 +140,26 @@ class CrazyflieEnv(gym.Env):
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 4, TRAINING_POS_RANGE / 4)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 4, TRAINING_POS_RANGE / 4)
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
                 start_z =self.np_random.uniform(0.1, TRAINING_POS_RANGE)
 
-                self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
-                self.data.qpos[base_qpos + 1] = start_y
+                self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
+                self.data.qpos[base_qpos + 1] = 0.0
                 self.data.qpos[base_qpos + 2] = 1.0
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
 
                 # Random rotation axis with small rotation angle
-                # axis = self.np_random.normal(size=3)
-                # axis /= np.linalg.norm(axis)
-                # angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+                axis = self.np_random.normal(size=3)
+                axis /= np.linalg.norm(axis)
+                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
 
-                # w = np.cos(angle / 2.0)
-                # x, y, z = axis * np.sin(angle / 2.0)
+                w = np.cos(angle / 2.0)
+                x, y, z = axis * np.sin(angle / 2.0)
 
-                # quat = np.array([w, x, y, z], dtype=np.float64)
-                # self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
+                quat = np.array([w, x, y, z], dtype=np.float64)
+                self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
         else:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
@@ -224,14 +228,14 @@ class CrazyflieEnv(gym.Env):
             #############################################
             base_ctrl = i * self.ctrl_per_drone
 
-            thrust = action[base_ctrl + 0]
-            roll   = action[base_ctrl + 1]
-            pitch  = action[base_ctrl + 2]
-            yaw    = action[base_ctrl + 3]
+            thrust = np.clip(action[base_ctrl + 0], 0.0, 0.35)
+            roll   = np.clip(action[base_ctrl + 1], -1, 1)
+            pitch  = np.clip(action[base_ctrl + 2], -1, 1)
+            yaw    = np.clip(action[base_ctrl + 3], -1, 1)
 
-            ctrl[base_ctrl + 0] = np.clip(BASE_HOVER_THRUST, 0.0, 0.35)
-            ctrl[base_ctrl + 1] = np.clip(roll, -1.0, 1.0)
-            ctrl[base_ctrl + 2] = np.clip(pitch, -1.0, 1.0)
+            ctrl[base_ctrl + 0] = BASE_HOVER_THRUST
+            ctrl[base_ctrl + 1] = roll
+            ctrl[base_ctrl + 2] = pitch
             ctrl[base_ctrl + 3] = 0.0
 
 
@@ -255,7 +259,6 @@ class CrazyflieEnv(gym.Env):
             # tilt angle = arccos(dot product of drone_z_up and world_z_up)
             # In this case, just equal to drone_z_up[2] since world_z_up = [0, 0, 1]
             tilt_angle = np.arccos(np.clip(drone_z_up[2], -1.0, 1.0))
-
             if tilt_angle < DRONE_TILT_EPISLON:
                 reward += 0.001
 
@@ -271,7 +274,7 @@ class CrazyflieEnv(gym.Env):
             truncated = self.timestep >= self.max_steps
 
             if self.debug:
-                print(f"Ctrl: {[f'{c:.4f}' for c in ctrl]}, Height: {pos[2]:.2f}, Reward: {reward:.4f}")
+                print(f"Ctrl: {[f'{c:.4f}' for c in ctrl]}, Position: {[f'{p:.2f}' for p in pos]}, Reward: {reward:.4f}")
             
         # Apply control and step
         self.data.ctrl[:] = ctrl
@@ -343,7 +346,7 @@ class CrazyflieEnv(gym.Env):
             # Update prev pos and derivative error
             self.prev_pos_error[i] = pos_error.copy()
             self.prev_derivative_error[i] = derivative_error.copy()
-                        
+            
             # normalized_prev_ctrl stores normalized [-1, 1] previous action controls
             normalized_prev_ctrl = [
                 2 * (self.prev_action[i][0] / 0.35) - 1,
@@ -381,6 +384,21 @@ class CrazyflieEnv(gym.Env):
             self.integral_quat_error[i] = 0.95 * self.integral_quat_error[i] + 0.05 * quat_error
             self.prev_quat_error[i] = quat_error.copy()
 
+            # From quaternion -> rotation matrix
+            R = quat_to_rotation_matrix(quat)
+             # Drone's body x and y axes in world frame
+            rotation_x_vector = R[:, 0]
+            rotation_y_vector   = R[:, 1]
+
+            # Project velocity onto drone axes, how much is drone moving on roll/pitch axes
+            vel_rotation_x = np.dot(vel, rotation_x_vector)
+            vel_rotation_y   = np.dot(vel, rotation_y_vector)
+
+            # Project pos_error onto drone axes, how is pos error moving on roll/pitch axes
+            pos_error_rotation_x = np.dot(pos_error, rotation_x_vector)
+            pos_error_rotation_y   = np.dot(pos_error, rotation_y_vector)
+
+
             obs.extend(np.concatenate(
                 [
                     # Base features
@@ -398,7 +416,9 @@ class CrazyflieEnv(gym.Env):
                     drone_up_vector,
                     quat_error,
                     quat_derivative_error,
-                    self.integral_quat_error[i]
+                    self.integral_quat_error[i],
+                    np.array([vel_rotation_x, vel_rotation_y], dtype=np.float32),
+                    np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32)
                 ]))
 
         return np.array(obs, dtype=np.float32)

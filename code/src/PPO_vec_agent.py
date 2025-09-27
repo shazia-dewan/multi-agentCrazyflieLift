@@ -13,6 +13,7 @@ from neural_network import PolicyNetwork, ValueNetwork
 # Current setup is suboptimal for full GPU computations (e.g. lots of conversion to CPU storage)
 #   For larger batches or networks, perhaps store rollout buffer directly as torch tensors on GPU
 #   Only call .cpu().numpy() before env.step
+#   Stepping might still be the bottleneck via CPU
 
 class RolloutBufferVec:
     """

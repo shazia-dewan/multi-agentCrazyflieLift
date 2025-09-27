@@ -110,7 +110,7 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42):
             total_reward += reward
 
             viewer.sync()
-            time.sleep(1/60)
+            time.sleep(1/120)
 
             if done:
                 break
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.25, 0.25, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.0, 1.0], dtype=np.float32),
         max_steps=3000,
         random_initialization=False,
         debug=True
