@@ -20,7 +20,7 @@ class CrazyflieEnv(gym.Env):
         xml_path: str, 
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
-        max_steps: int = 1200,
+        max_steps: int = 1500,
         random_initialization: bool = True,
         debug: bool = False,
     ):
@@ -76,24 +76,32 @@ class CrazyflieEnv(gym.Env):
             21: "derivative_pos_err_x", 22: "derivative_pos_err_y", 23: "derivative_pos_err_z",
             24: "sec_derivative_pos_err_x", 25: "sec_derivative_pos_err_y", 26: "sec_derivative_pos_err_z",
             27: "integral_pos_err_x", 28: "integral_pos_err_y", 29: "integral_pos_err_z",
-            30: "vel_dist_x", 31: "vel_dist_y", 32: "vel_dist_z", 
+            30: "vel_over_dist_x", 31: "vel_over_dist_y", 32: "vel_over_dist_z", 
             33: "vel_along_err",
+
+            # Velocity features
             34: "vel_norm_x", 35: "vel_norm_y", 36: "vel_norm_z",
+            37: "derivative_vel_x", 38: "derivative_vel_y", 39: "derivative_vel_z",
+            40: "integral_vel_x", 41: "integral_vel_y", 42: "integral_vel_z",
+            43: "ang_vel_norm_x", 44: "ang_vel_norm_y", 45: "ang_vel_norm_z",
+            46: "derivative_ang_vel_x", 47: "derivative_ang_vel_y", 48: "derivative_ang_vel_z",
+            49: "integral_ang_vel_x", 50: "integral_ang_vel_y", 51: "integral_ang_vel_z",
 
             # Rotational features
-            37: "drone_up_x", 38: "drone_up_y", 39: "drone_up_z",
-            40: "quat_err_x", 41: "quat_err_y", 42: "quat_err_z",
-            43: "derivative_quat_err_x", 44: "derivative_quat_err_y", 45: "derivative_quat_err_z",
-            46: "integral_quat_err_x", 47: "integral_quat_err_y", 48: "integral_quat_err_z",
-            49: "vel_rotation_x", 50: "vel_rotation_y",
-            51: "pos_error_rotation_x", 52: "pos_error_rotation_y",
+            52: "drone_up_x", 53: "drone_up_y", 54: "drone_up_z",
+            55: "quat_err_x", 56: "quat_err_y", 57: "quat_err_z",
+            58: "derivative_quat_err_x", 59: "derivative_quat_err_y", 60: "derivative_quat_err_z",
+            61: "integral_quat_err_x", 62: "integral_quat_err_y", 63: "integral_quat_err_z",
+            64: "vel_rotation_x", 65: "vel_rotation_y",
+            66: "pos_error_rotation_x", 67: "pos_error_rotation_y",
 
             # Control (action) features
-            53: "prev_ctrl_thrust", 54: "prev_ctrl_roll", 55: "prev_ctrl_pitch", 56: "prev_ctrl_yaw",
-            57: "derivative_ctrl_thrust", 58: "derivative_ctrl_roll", 59: "derivative_ctrl_pitch", 60: "derivative_ctrl_yaw",
+            68: "prev_ctrl_thrust", 69: "prev_ctrl_roll", 70: "prev_ctrl_pitch", 71: "prev_ctrl_yaw",
+            72: "derivative_ctrl_thrust", 73: "derivative_ctrl_roll", 74: "derivative_ctrl_pitch", 75: "derivative_ctrl_yaw",
+            76: "integral_ctrl_thrust", 77: "integral_ctrl_roll", 78: "integral_ctrl_pitch", 79: "integral_ctrl_yaw",
         }
 
-        obs_high = np.inf * np.ones(61 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(80 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -126,18 +134,29 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.model, self.data)
 
-        # Set up tracking for previous drone(s) e.g. for certain features like derivative
-        self.prev_action = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
-        
+        # Position tracking for previous drone(s) feature
         self.prev_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.prev_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.derivative_prev_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
 
+        # Velocity tracking for previous drone(s) feature
+        self.prev_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.derivative_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.integral_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+        # Angular velocities
+        self.prev_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.derivative_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.integral_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
+
+        # Rotation tracking for previous drone(s) feature
         self.prev_quat_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_quat_error = np.zeros((self.num_drones, 3), dtype=np.float32)
 
-        self.derivative_prev_action = np.zeros((self.num_drones, 4), dtype=np.float32)
+        # Control tracking for previous drone(s) feature
+        self.prev_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
+        self.derivative_control = np.zeros((self.num_drones, 4), dtype=np.float32)
+        self.integral_control = np.zeros((self.num_drones, 4), dtype=np.float32)
         
         # If using multiple drones, offset them along X axis
         drone_spacing_x = 0.4
@@ -148,8 +167,8 @@ class CrazyflieEnv(gym.Env):
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
                 start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
 
                 self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
@@ -261,15 +280,15 @@ class CrazyflieEnv(gym.Env):
             self.prev_pos[i] = pos.copy()
 
             # Track how the action changes between steps (1-step derivative)
-            self.derivative_prev_action[i] = np.array([
-                (2 * (ctrl[base_ctrl + 0] / 0.35) - 1) - (2 * (self.prev_action[i][0] / 0.35) - 1),
-                ctrl[base_ctrl + 1] - self.prev_action[i][1],
-                ctrl[base_ctrl + 2] - self.prev_action[i][2],
-                ctrl[base_ctrl + 3] - self.prev_action[i][3]
+            self.derivative_control[i] = np.array([
+                (2 * (ctrl[base_ctrl + 0] / 0.35) - 1) - (2 * (self.prev_control[i][0] / 0.35) - 1),
+                ctrl[base_ctrl + 1] - self.prev_control[i][1],
+                ctrl[base_ctrl + 2] - self.prev_control[i][2],
+                ctrl[base_ctrl + 3] - self.prev_control[i][3]
             ], dtype=np.float32)
 
             # Update prev action for next timestep (to store in observations)
-            self.prev_action[i] = ctrl[base_ctrl : base_ctrl + self.ctrl_per_drone].copy()
+            self.prev_control[i] = ctrl[base_ctrl : base_ctrl + self.ctrl_per_drone].copy()
 
             # Termination (just truncation in this case, no terminating condition)
             terminated = False
@@ -324,7 +343,7 @@ class CrazyflieEnv(gym.Env):
             #################################################################
 
             # ---------------------------------------------------------------------
-            # Features that are mainly built to help thrust control
+            # Positional features
             # E.g. derivative and integral pos error to help model PID controller
             # ---------------------------------------------------------------------
 
@@ -352,15 +371,12 @@ class CrazyflieEnv(gym.Env):
             # Velocity over distance
             vel_over_dist = vel / (distance_to_target + 1e-9)
 
-            # Projection of velocity along the error vector
+            # Projection of velocity along the pos error vector
             # scalar value: moving toward (+) or away (-) from the target, and how fast relative to the gap
             vel_along_error = np.dot(vel, pos_error) / (distance_to_target + 1e-9)
 
-            # Normalized velocity
-            vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
-
             # ---------------------------------------------------------------------
-            # Features that are mainly built to help orientation control
+            # Rotational features
             # ---------------------------------------------------------------------
             w, x, y, z = quat[:]
 
@@ -393,22 +409,42 @@ class CrazyflieEnv(gym.Env):
             pos_error_rotation_x = np.dot(pos_error, rotation_x_vector)
             pos_error_rotation_y   = np.dot(pos_error, rotation_y_vector)
 
-            # ------------------------------------------
-            # Features for action history
-            # ------------------------------------------
+            # ---------------------------------------------------------------------
+            # Velocity (base and angular) features
+            # ---------------------------------------------------------------------
+
+            # Normalized velocity
+            vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
+            vel_derivative = vel - self.prev_vel[i]
+            self.integral_vel[i] = 0.95 * self.integral_vel + 0.05 * vel
+            self.prev_vel[i] = vel.copy()
+
+            ang_vel_norm = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
+            ang_vel_derivative = ang_vel - self.prev_ang_vel[i]
+            self.integral_ang_vel[i] = 0.95 * self.integral_ang_vel + 0.05 * ang_vel
+            self.prev_ang_vel[i] = ang_vel.copy()
+
+            # ---------------------------------------------------------------------
+            # Control (action) features
+            # Derivative control updated in step()
+            # ---------------------------------------------------------------------
 
             # normalized_prev_ctrl stores normalized [-1, 1] previous action controls
             normalized_prev_ctrl = np.array([
-                2 * (self.prev_action[i][0] / 0.35) - 1,
-                self.prev_action[i][1],
-                self.prev_action[i][2],
-                self.prev_action[i][3]
+                2 * (self.prev_control[i][0] / 0.35) - 1,
+                self.prev_control[i][1],
+                self.prev_control[i][2],
+                self.prev_control[i][3]
             ], dtype=np.float32)
+
+            # Update action integral
+            self.integral_control[i] = 0.95 * self.integral_control[i] + 0.05 * normalized_prev_ctrl
 
             obs.extend(np.concatenate(
                 [
                     # Base features
                     pos, quat, vel, ang_vel, 
+
                     # Positional features
                     normalized_pos,
                     pos_error,
@@ -416,7 +452,16 @@ class CrazyflieEnv(gym.Env):
                     derivative_error,
                     second_derivative_error,
                     self.integral_pos_error[i],
-                    vel_over_dist, np.array([vel_along_error], dtype=np.float32), vel_norm,
+                    vel_over_dist, np.array([vel_along_error], dtype=np.float32),
+
+                    # Velocity features
+                    vel_norm,
+                    vel_derivative,
+                    self.integral_vel[i],
+                    ang_vel_norm,
+                    ang_vel_derivative,
+                    self.integral_ang_vel[i],
+
                     # Rotational features
                     drone_up_vector,
                     quat_error,
@@ -424,9 +469,11 @@ class CrazyflieEnv(gym.Env):
                     self.integral_quat_error[i],
                     np.array([vel_rotation_x, vel_rotation_y], dtype=np.float32),
                     np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32),
+
                     # Action features
                     normalized_prev_ctrl,
-                    self.derivative_prev_action[i],
+                    self.derivative_control[i],
+                    self.integral_control[i]
                 ]))
 
         return np.array(obs, dtype=np.float32)

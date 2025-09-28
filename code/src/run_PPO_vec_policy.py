@@ -131,8 +131,8 @@ if __name__ == "__main__":
         help="Optionally provide a model path. If omitted, uses default PPO save path."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_timesteps", type=int, default=120_000, help="Total timesteps for training")
-    parser.add_argument("--num_steps", type=int, default=1200, help="Number of timesteps before policy updates")
+    parser.add_argument("--total_timesteps", type=int, default=150_000, help="Total timesteps for training")
+    parser.add_argument("--num_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
 
@@ -180,7 +180,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, -0.5, 1.0], dtype=np.float32),
         max_steps=3000,
         random_initialization=False,
         debug=True
