@@ -74,7 +74,7 @@ def train_PPO(
             for i, done in enumerate(dones):
                 if done:
                     if print_logs:
-                        print(f"Update {update + 1}/{num_updates}: env {i + 1} finished an episode with return: {episode_returns[i]:.2f}")
+                        print(f"Update {update + 1}/{num_updates}: env {i + 1:2d} finished an episode with return: {episode_returns[i]:.2f}")
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
@@ -102,7 +102,7 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42):
     obs, _ = env.reset(seed)
 
     total_reward = 0.0
-    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+    with mujoco.viewer.launch_passive(env.mujoco_scene, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
         for _ in range(env.max_steps):
             action, _, _ = agent.sample_action(obs, deterministic=True)
@@ -181,7 +181,7 @@ if __name__ == "__main__":
         xml_path=SCENE_PATH,
         num_drones=1,
         target_pos=np.array([0.0, -0.5, 1.0], dtype=np.float32),
-        max_steps=3000,
+        max_steps=4000,
         random_initialization=False,
         debug=True
     )
