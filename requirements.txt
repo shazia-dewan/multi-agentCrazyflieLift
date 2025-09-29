@@ -4,4 +4,5 @@ gymnasium==1.2.0
 torch==2.8.0
 pandas==2.3.2
 stable_baselines3==2.7.0
-scipy=1.16.2
+scipy==1.16.2
+tabulate==0.9.0

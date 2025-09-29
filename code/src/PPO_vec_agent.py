@@ -136,6 +136,8 @@ class PPOAgentVec:
         track_obs_gradient : bool
             Whether to track the gradient wrt observations (e.g. logs)
         """
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
         self.buffer = RolloutBufferVec()
         self.gamma = gamma
         self.clip_eps = clip_eps
@@ -148,8 +150,8 @@ class PPOAgentVec:
 
         self.track_obs_gradient = track_obs_gradient
         self.obs_names = [f"obs_{i}" for i in range(obs_dim)]
-        self.obs_importance = DefaultDict(float)
-        self.obs_counts = DefaultDict(int)
+        self.obs_importance = np.zeros((action_dim, obs_dim), dtype=np.float32)
+        self.obs_counts = np.zeros((action_dim, obs_dim), dtype=np.int32)
 
         self.policy_network = PolicyNetwork(obs_dim, action_dim).to(self.device)
         self.value_network = ValueNetwork(obs_dim).to(self.device)
@@ -197,19 +199,23 @@ class PPOAgentVec:
         else:
             action_tensor = dist.rsample()
 
-        # Track importance of each observation for the given action
+
+        # Observation gradients w.r.t. each action (Track importance of features for each action, used during eval)
         if self.track_obs_gradient:
-            # Observation gradient w.r.t. first action dimension (thrust)
-            # TODO: Test with other controls later when moving to full [X, Y, Z]
-            mean[0,0].backward(retain_graph=True) 
-            gradients = obs_tensor.grad.detach().cpu().numpy()[0]
-
-            for i, g in enumerate(gradients):
-                self.obs_importance[i] += abs(g)
-                self.obs_counts[i] += 1
-
-            # Clear for next step
-            obs_tensor.grad.zero_()
+            for a in range(self.action_dim):
+                self.policy_network.zero_grad(set_to_none=True)
+                self.value_network.zero_grad(set_to_none=True)
+                obs_tensor.grad = None
+                
+                # Compute observation gradients for current action
+                mean[0, a].backward(retain_graph=True)
+                gradients = obs_tensor.grad.detach().cpu().numpy()[0]
+                
+                for i, g in enumerate(gradients):
+                    self.obs_importance[a, i] += abs(g)
+                    self.obs_counts[a, i] += 1
+                
+                obs_tensor.grad.zero_()
 
         # Sum log_prob per env across action dimensions, log_prob & value shape: (num_envs,)
         log_prob = dist.log_prob(action_tensor).sum(dim=-1)
@@ -459,19 +465,30 @@ class PPOAgentVec:
         self.buffer.clear()
 
 
-    def get_obs_importance(self):
+    def get_obs_importance(self, action_idx: int | None = None) -> dict:
         """
-        Returns
-        -------
-        Returns the index and importance for every observation
+        Returns feature importance for each observation.
+        
+        Parameters
+        ----------
+        action_idx : int or None
+            If specified, return importance for that action dimension.
+            If None, return aggregated importance across all actions.
         """
         importance = {}
-        for i in range(len(self.obs_names)):
-            if self.obs_counts[i] > 0:
-                importance[self.obs_names[i]] = self.obs_importance[i] / self.obs_counts[i]
+        if action_idx is not None:
+            counts = self.obs_counts[action_idx]
+            scores = self.obs_importance[action_idx] / np.maximum(counts, 1)
+        else:
+            counts = np.sum(self.obs_counts, axis=0)
+            scores = np.sum(self.obs_importance, axis=0) / np.maximum(counts, 1)
+
+        for i, s in enumerate(scores):
+            if counts[i] > 0:
+                importance[self.obs_names[i]] = s
         
-        # Sort descending (most important first)
         return dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
+
 
 
     def save(self, filepath: str):

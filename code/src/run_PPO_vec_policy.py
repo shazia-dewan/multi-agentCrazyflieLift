@@ -1,9 +1,11 @@
 import os
+import csv
 import time
 import argparse
 import numpy as np
 import mujoco.viewer
 import torch
+from tabulate import tabulate
 
 from constants import SCENE_PATH, MODEL_SAVE_PATH
 from PPO_vec_agent import PPOAgentVec
@@ -186,12 +188,46 @@ if __name__ == "__main__":
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env, seed=42, sleep_time=1/240)
+    render_PPO(agent, render_env, seed=42, sleep_time=1/1640)
 
-    # Checking which observations were important to the agent over the render run
-    print("\nFeature importance ranking:")
-    for name, score in agent.get_obs_importance().items():
-        # Extract obs index e.g. obs_15 --> 15, look it up in env obs map
-        idx = int(name.split("_")[1])
-        feature_name = render_env.observation_names[idx]
-        print(f"{feature_name:15s} (idx {idx:2d}): {score:.4f}")
+    # Feature importance for each action
+    print("\nFeature importance ranking (per action):")
+    rows = []
+    for idx, feature_name in enumerate(render_env.observation_names):
+        scores = []
+        for a in range(agent.action_dim):
+            counts = agent.obs_counts[a][idx]
+            if counts > 0:
+                scores.append(agent.obs_importance[a][idx] / counts)
+            else:
+                scores.append(0.0)
+       
+        score_sum = sum(scores)
+        rows.append([idx, feature_name] + scores + [score_sum])
+
+    headers = ["Idx", "Feature", "Thrust", "Roll", "Pitch", "Yaw", "Sum"]
+
+    # Sorting the importance table
+    # Change to "Thrust", "Roll", "Pitch", or "Yaw" to order importance for a specific action
+    sortby = "Sum"
+    col_idx = headers.index(sortby)
+    rows.sort(key=lambda x: x[col_idx], reverse=True)
+
+    # Format value columns (decimal precision)
+    rows_formatted = [[r[0], r[1]] + [f"{s:.4f}" for s in r[2:]] for r in rows]
+
+    print(tabulate(rows_formatted, headers=headers, tablefmt="fancy_grid"))
+
+
+    # Save feature importance results to a CSV
+    out_dir = os.path.join(os.path.dirname(__file__), "..", "output_feature_importance")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "feature_importance.csv")
+
+    with open(out_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for r in rows:
+            writer.writerow(r)
+
+    print(f"\nFeature importance CSV saved to {out_path}")
