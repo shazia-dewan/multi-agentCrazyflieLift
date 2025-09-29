@@ -9,7 +9,7 @@ from scipy.spatial.transform import Rotation as R
 BASE_HOVER_THRUST = 0.26487
 DRONE_TILT_EPISLON = np.deg2rad(10)
 TRAINING_POS_RANGE = 2.0
-TRAINING_QUAT_RANGE = np.pi / 18
+TRAINING_QUAT_RANGE = np.pi / 36
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -61,51 +61,10 @@ class CrazyflieEnv(gym.Env):
         self.debug = debug
 
         # Index of observations for logging afterwards (e.g. which observations were important)
-        self.obs_index_to_name = {
-            # Base features
-            0: "pos_x", 1: "pos_y", 2: "pos_z",
-            3: "quat_w", 4: "quat_x", 5: "quat_y", 6: "quat_z",
-            7: "vel_x", 8: "vel_y", 9: "vel_z",
-            10: "ang_x", 11: "ang_y", 12: "ang_z",
+        self.observation_names = []
 
-            # Positional features
-            13: "pos_norm_x", 14: "pos_norm_y", 15: "pos_norm_z",
-            16: "pos_err_x", 17: "pos_err_y", 18: "pos_err_z",
-            19: "dist_to_target", 20: "squared_dist_to_target",
-            21: "derivative_pos_err_x", 22: "derivative_pos_err_y", 23: "derivative_pos_err_z",
-            24: "sec_derivative_pos_err_x", 25: "sec_derivative_pos_err_y", 26: "sec_derivative_pos_err_z",
-            27: "integral_pos_err_x", 28: "integral_pos_err_y", 29: "integral_pos_err_z",
-            30: "vel_over_dist_x", 31: "vel_over_dist_y", 32: "vel_over_dist_z", 
-            33: "vel_along_err",
-
-            # Velocity features
-            34: "vel_norm_x", 35: "vel_norm_y", 36: "vel_norm_z",
-            37: "derivative_vel_x", 38: "derivative_vel_y", 39: "derivative_vel_z",
-            40: "integral_vel_x", 41: "integral_vel_y", 42: "integral_vel_z",
-            43: "ang_vel_norm_x", 44: "ang_vel_norm_y", 45: "ang_vel_norm_z",
-            46: "derivative_ang_vel_x", 47: "derivative_ang_vel_y", 48: "derivative_ang_vel_z",
-            49: "integral_ang_vel_x", 50: "integral_ang_vel_y", 51: "integral_ang_vel_z",
-
-            # Rotational features
-            52: "drone_up_x", 53: "drone_up_y", 54: "drone_up_z",
-            55: "quat_err_x", 56: "quat_err_y", 57: "quat_err_z",
-            58: "derivative_quat_err_x", 59: "derivative_quat_err_y", 60: "derivative_quat_err_z",
-            61: "integral_quat_err_x", 62: "integral_quat_err_y", 63: "integral_quat_err_z",
-            64: "vel_rotation_x", 65: "vel_rotation_y",
-            66: "pos_error_rotation_x", 67: "pos_error_rotation_y",
-            68: "derivative_quat_w", 69: "derivative_quat_x", 70: "derivative_quat_y", 71: "derivative_quat_z",
-            72: "integral_quat_w", 73: "integral_quat_x", 74: "integral_quat_y", 75: "integral_quat_z",
-
-            # Control (action) features
-            76: "prev_ctrl_thrust", 77: "prev_ctrl_roll", 78: "prev_ctrl_pitch", 79: "prev_ctrl_yaw",
-            80: "derivative_ctrl_thrust", 81: "derivative_ctrl_roll", 82: "derivative_ctrl_pitch", 83: "derivative_ctrl_yaw",
-            84: "integral_ctrl_thrust", 85: "integral_ctrl_roll", 86: "integral_ctrl_pitch", 87: "integral_ctrl_yaw",
-            88: "thrust_x", 89: "thrust_y", 90: "thrust_z",
-            91: "derivative_thrust_x", 92: "derivative_thrust_y", 93: "derivative_thrust_z",
-            94: "integral_thrust_x", 95: "integral_thrust_y", 96: "integral_thrust_z",
-        }
-
-        obs_high = np.inf * np.ones(97 * self.num_drones, dtype=np.float32)
+        # Define the observation space with n features based on how many we assign in _get_obs()
+        obs_high = np.inf * np.ones(107 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -116,6 +75,22 @@ class CrazyflieEnv(gym.Env):
 
         # Viewer
         self.viewer = None
+
+    def add_feature_names(self, name_list: list[str], values: np.ndarray) -> np.ndarray:
+        """
+        Add a feature from observations to the tracked list of feature names
+
+        Parameters
+        ----------
+        name_list : list[str]
+            The list of feature names
+        values : np.ndarray
+            The list of feature values
+        """
+        # Only build the name index once
+        if self.timestep == 1:
+            self.observation_names.extend(name_list)
+        return values
 
 
     def reset(self, seed: Optional[int] = None) -> tuple[np.ndarray, dict[str, Any]]:
@@ -175,8 +150,8 @@ class CrazyflieEnv(gym.Env):
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 10, TRAINING_POS_RANGE / 10)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 10, TRAINING_POS_RANGE / 10)
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 5, TRAINING_POS_RANGE / 5)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 5, TRAINING_POS_RANGE / 5)
                 start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
 
                 self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
@@ -374,19 +349,38 @@ class CrazyflieEnv(gym.Env):
             # angular velocity[wx, wy, wz]
             ang_vel = self.data.qvel[base_qvel + 3 : base_qvel + 6]
 
+            obs.extend(self.add_feature_names(["pos_x", "pos_y", "pos_z"], pos))
+            obs.extend(self.add_feature_names(["quat_w", "quat_x", "quat_y", "quat_z"], quat))
+            obs.extend(self.add_feature_names(["vel_x", "vel_y", "vel_z"], vel))
+            obs.extend(self.add_feature_names(["ang_x", "ang_y", "ang_z"], ang_vel))
+
+
+            # ------------------------------------------------------------------------
+            # Extract some other useful features that can be used in multiple areas
+            # ------------------------------------------------------------------------
+
+            # Experimentally, doing pos - target instead of target - pos works better here as pos_error
+            pos_error = pos - self.target_pos
+            distance_to_target = np.linalg.norm(pos_error)
+
+            # Direction to target in world coordinates (unit vector of pos_error)
+            direction_to_target = (self.target_pos - pos) / (np.linalg.norm(distance_to_target) + 1e-9)
+
+            # From quaternion -> rotation matrix (get orientation of drone in world coordinates)
+            quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
+            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+
+            # Direction to target in drone's local body coordinates
+            direction_to_target_in_body = rotation_matrix.T @ direction_to_target
+
             # ---------------------------------------------------------------------
             # Positional engineered features
             # E.g. derivative and integral pos error to help model PID controller
             # ---------------------------------------------------------------------
 
-            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target + scaled to [-1, 1]
+            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
             normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
 
-            # pos_error is a vector for the XYZ position error between the drone and target
-            pos_error = pos - self.target_pos
-
-            # distance_to_target and squared_distance_to_target are scalars storing abs/squared distance to target
-            distance_to_target = np.linalg.norm(pos_error)
             squared_distance_to_target = distance_to_target ** 2
 
             # 1st and 2nd derivative position error over one step ~ velocity and acceleration of error
@@ -400,38 +394,56 @@ class CrazyflieEnv(gym.Env):
             self.prev_pos_error[i] = pos_error.copy()
             self.derivative_prev_pos_error[i] = derivative_error.copy()
 
-            # Velocity over distance
-            vel_over_dist = vel / (distance_to_target + 1e-9)
-
-            # Projection of velocity along the pos error vector
-            # scalar value: moving toward (+) or away (-) from the target, and how fast relative to the gap
-            vel_along_error = np.dot(vel, pos_error) / (distance_to_target + 1e-9)
+            obs.extend(self.add_feature_names(["pos_norm_x", "pos_norm_y", "pos_norm_z"], normalized_pos))
+            obs.extend(self.add_feature_names(["pos_err_x", "pos_err_y", "pos_err_z"], pos_error))
+            obs.extend(self.add_feature_names(["dist_to_target", "squared_dist_to_target"], np.array([distance_to_target, squared_distance_to_target], dtype=np.float32)))
+            obs.extend(self.add_feature_names(["derivative_pos_err_x", "derivative_pos_err_y", "derivative_pos_err_z"], derivative_error))
+            obs.extend(self.add_feature_names(["sec_derivative_pos_err_x", "sec_derivative_pos_err_y", "sec_derivative_pos_err_z"], second_derivative_error))
+            obs.extend(self.add_feature_names(["integral_pos_err_x", "integral_pos_err_y", "integral_pos_err_z"], self.integral_pos_error[i]))
 
 
             # ---------------------------------------------------------------------
             # Velocity (base and angular) engineered features
             # ---------------------------------------------------------------------
 
+            # Projection of velocity along the pos error vector
+            # scalar value: moving toward (+) or away (-) from the target, and how fast relative to the gap
+            vel_along_error = np.dot(vel, pos_error) / (distance_to_target + 1e-9)
+
+            # Velocity over distance
+            vel_over_dist = vel / (distance_to_target + 1e-9)
+
             vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
             vel_derivative = vel - self.prev_vel[i]
-            self.integral_vel[i] = 0.95 * self.integral_vel + 0.05 * vel
+            self.integral_vel[i] = 0.95 * self.integral_vel[i] + 0.05 * vel
             self.prev_vel[i] = vel.copy()
 
             ang_vel_norm = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
             ang_vel_derivative = ang_vel - self.prev_ang_vel[i]
-            self.integral_ang_vel[i] = 0.95 * self.integral_ang_vel + 0.05 * ang_vel
+            self.integral_ang_vel[i] = 0.95 * self.integral_ang_vel[i] + 0.05 * ang_vel
             self.prev_ang_vel[i] = ang_vel.copy()
+
+            # Skid component (lateral velocity): Velocity - Velocity along target direction
+            skid_velocity = vel - np.dot(vel, direction_to_target) * direction_to_target
+
+            # Approximate the orbital angular momentum: indicator of circling (orbitting) about the target
+            angular_momentum_proxy = np.cross(pos_error, vel)
+
+            obs.extend(self.add_feature_names(["vel_along_err"], np.array([vel_along_error], dtype=np.float32)))
+            obs.extend(self.add_feature_names(["vel_over_dist_x", "vel_over_dist_y", "vel_over_dist_z"], vel_over_dist))
+            obs.extend(self.add_feature_names(["vel_norm_x", "vel_norm_y", "vel_norm_z"], vel_norm))
+            obs.extend(self.add_feature_names(["derivative_vel_x", "derivative_vel_y", "derivative_vel_z"], vel_derivative))
+            obs.extend(self.add_feature_names(["integral_vel_x", "integral_vel_y", "integral_vel_z"], self.integral_vel[i]))
+            obs.extend(self.add_feature_names(["ang_vel_norm_x", "ang_vel_norm_y", "ang_vel_norm_z"], ang_vel_norm))
+            obs.extend(self.add_feature_names(["derivative_ang_vel_x", "derivative_ang_vel_y", "derivative_ang_vel_z"], ang_vel_derivative))
+            obs.extend(self.add_feature_names(["integral_ang_vel_x", "integral_ang_vel_y", "integral_ang_vel_z"], self.integral_ang_vel[i]))
+            obs.extend(self.add_feature_names(["skid_vel_x", "skid_vel_y", "skid_vel_z"], skid_velocity))
+            obs.extend(self.add_feature_names(["angular_momentum_x", "angular_momentum_y", "angular_momentum_z"], angular_momentum_proxy))
 
 
             # ---------------------------------------------------------------------
             # Rotational engineered features
             # ---------------------------------------------------------------------
-            w, x, y, z = quat[:]
-
-            # From quaternion -> rotation matrix (orientation of drone in world coordinates)
-            # SciPy expects [x, y, z, w], so reorder
-            quat_xyzw = np.roll(quat, -1)
-            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
 
             # drone_up_vector is where the drones local body Z axis is pointing in world coordinates
             drone_up_vector = np.array([
@@ -463,6 +475,16 @@ class CrazyflieEnv(gym.Env):
             self.integral_quat[i] = 0.95 * self.integral_quat[i] + 0.05 * quat
             self.prev_quat[i] = quat.copy()
 
+            obs.extend(self.add_feature_names(["drone_up_x", "drone_up_y", "drone_up_z"], drone_up_vector))
+            obs.extend(self.add_feature_names(["quat_err_x", "quat_err_y", "quat_err_z"], quat_error))
+            obs.extend(self.add_feature_names(["derivative_quat_err_x", "derivative_quat_err_y", "derivative_quat_err_z"], quat_derivative_error))
+            obs.extend(self.add_feature_names(["integral_quat_err_x", "integral_quat_err_y", "integral_quat_err_z"], self.integral_quat_error[i]))
+            obs.extend(self.add_feature_names(["vel_rotation_x", "vel_rotation_y"], np.array([vel_rotation_x, vel_rotation_y], dtype=np.float32)))
+            obs.extend(self.add_feature_names(["pos_error_rotation_x", "pos_error_rotation_y"], np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32)))
+            obs.extend(self.add_feature_names(["derivative_quat_w", "derivative_quat_x", "derivative_quat_y", "derivative_quat_z"], quat_derivative))
+            obs.extend(self.add_feature_names(["integral_quat_w", "integral_quat_x", "integral_quat_y", "integral_quat_z"], self.integral_quat[i]))
+            obs.extend(self.add_feature_names(["dir_to_target_body_x", "dir_to_target_body_y", "dir_to_target_body_z"], direction_to_target_in_body))
+
 
             # ---------------------------------------------------------------------
             # Control (action) engineered features
@@ -488,47 +510,18 @@ class CrazyflieEnv(gym.Env):
             derivative_world_thrust = world_thrust - self.prev_world_thrust[i]
             self.integral_world_thrust[i] = 0.95 * self.integral_world_thrust[i] + 0.05 * world_thrust
             self.prev_world_thrust[i] = world_thrust
+            
+            # Alignment in [-1, 1] of thrust towards the target
+            thrust_alignment = np.dot(world_thrust, direction_to_target)
 
-            obs.extend(np.concatenate(
-                [
-                    # Base features
-                    pos, quat, vel, ang_vel, 
+            obs.extend(self.add_feature_names(["prev_ctrl_thrust", "prev_ctrl_roll", "prev_ctrl_pitch", "prev_ctrl_yaw"], normalized_prev_ctrl))
+            obs.extend(self.add_feature_names(["derivative_ctrl_thrust", "derivative_ctrl_roll", "derivative_ctrl_pitch", "derivative_ctrl_yaw"], self.derivative_control[i]))
+            obs.extend(self.add_feature_names(["integral_ctrl_thrust", "integral_ctrl_roll", "integral_ctrl_pitch", "integral_ctrl_yaw"], self.integral_control[i]))
+            obs.extend(self.add_feature_names(["thrust_x", "thrust_y", "thrust_z"], world_thrust))
+            obs.extend(self.add_feature_names(["derivative_thrust_x", "derivative_thrust_y", "derivative_thrust_z"], derivative_world_thrust))
+            obs.extend(self.add_feature_names(["integral_thrust_x", "integral_thrust_y", "integral_thrust_z"], self.integral_world_thrust[i]))
+            obs.extend(self.add_feature_names(["thrust_alignment"], np.array([thrust_alignment], dtype=np.float32)))
 
-                    # Positional features
-                    normalized_pos,
-                    pos_error,
-                    np.array([distance_to_target, squared_distance_to_target], dtype=np.float32),
-                    derivative_error,
-                    second_derivative_error,
-                    self.integral_pos_error[i],
-                    vel_over_dist, np.array([vel_along_error], dtype=np.float32),
-
-                    # Velocity features
-                    vel_norm,
-                    vel_derivative,
-                    self.integral_vel[i],
-                    ang_vel_norm,
-                    ang_vel_derivative,
-                    self.integral_ang_vel[i],
-
-                    # Rotational features
-                    drone_up_vector,
-                    quat_error,
-                    quat_derivative_error,
-                    self.integral_quat_error[i],
-                    np.array([vel_rotation_x, vel_rotation_y], dtype=np.float32),
-                    np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32),
-                    quat_derivative,
-                    self.integral_quat[i],
-
-                    # Action features
-                    normalized_prev_ctrl,
-                    self.derivative_control[i],
-                    self.integral_control[i],
-                    world_thrust,
-                    derivative_world_thrust,
-                    self.integral_world_thrust[i],
-                ]))
 
         return np.array(obs, dtype=np.float32)
 

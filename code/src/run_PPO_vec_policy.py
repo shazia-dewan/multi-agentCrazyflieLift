@@ -95,7 +95,7 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, sleep_time: float = 1/120):
     """
     Render trained PPO in a single environment
     """
@@ -110,7 +110,7 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42):
             total_reward += reward
 
             viewer.sync()
-            time.sleep(1/120)
+            time.sleep(sleep_time)
 
             if done:
                 break
@@ -186,12 +186,12 @@ if __name__ == "__main__":
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env)
+    render_PPO(agent, render_env, seed=42, sleep_time=1/240)
 
     # Checking which observations were important to the agent over the render run
     print("\nFeature importance ranking:")
     for name, score in agent.get_obs_importance().items():
         # Extract obs index e.g. obs_15 --> 15, look it up in env obs map
         idx = int(name.split("_")[1])
-        feature_name = render_env.obs_index_to_name.get(idx, f"obs_{idx}")
+        feature_name = render_env.observation_names[idx]
         print(f"{feature_name:15s} (idx {idx:2d}): {score:.4f}")
