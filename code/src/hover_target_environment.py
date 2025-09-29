@@ -64,7 +64,7 @@ class CrazyflieEnv(gym.Env):
         self.observation_names = []
 
         # Define the observation space with n features based on how many we assign in _get_obs()
-        obs_high = np.inf * np.ones(107 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(115 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -133,6 +133,8 @@ class CrazyflieEnv(gym.Env):
         self.integral_quat_error = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.prev_quat = np.zeros((self.num_drones, 4), dtype=np.float32)
         self.integral_quat = np.zeros((self.num_drones, 4), dtype=np.float32)
+        self.prev_direction_to_target_in_body = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.integral_direction_to_target_in_body = np.zeros((self.num_drones, 3), dtype=np.float32)
 
         # Control tracking for previous drone(s) feature
         self.prev_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
@@ -140,6 +142,8 @@ class CrazyflieEnv(gym.Env):
         self.integral_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
         self.prev_world_thrust = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_world_thrust = np.zeros((self.num_drones, 3), dtype=np.float32)
+        self.prev_thrust_alignment = np.zeros(self.num_drones, dtype=np.float32)
+        self.integral_thrust_alignment = np.zeros(self.num_drones, dtype=np.float32)
         
         # If using multiple drones, offset them along X axis
         drone_spacing_x = 0.4
@@ -475,6 +479,10 @@ class CrazyflieEnv(gym.Env):
             self.integral_quat[i] = 0.95 * self.integral_quat[i] + 0.05 * quat
             self.prev_quat[i] = quat.copy()
 
+            derivative_direction_to_target_in_body = direction_to_target_in_body - self.prev_direction_to_target_in_body[i]
+            self.integral_direction_to_target_in_body[i] = 0.95 * self.integral_direction_to_target_in_body[i] + 0.05 * direction_to_target_in_body
+            self.prev_direction_to_target_in_body[i] = direction_to_target_in_body
+
             obs.extend(self.add_feature_names(["drone_up_x", "drone_up_y", "drone_up_z"], drone_up_vector))
             obs.extend(self.add_feature_names(["quat_err_x", "quat_err_y", "quat_err_z"], quat_error))
             obs.extend(self.add_feature_names(["derivative_quat_err_x", "derivative_quat_err_y", "derivative_quat_err_z"], quat_derivative_error))
@@ -484,6 +492,8 @@ class CrazyflieEnv(gym.Env):
             obs.extend(self.add_feature_names(["derivative_quat_w", "derivative_quat_x", "derivative_quat_y", "derivative_quat_z"], quat_derivative))
             obs.extend(self.add_feature_names(["integral_quat_w", "integral_quat_x", "integral_quat_y", "integral_quat_z"], self.integral_quat[i]))
             obs.extend(self.add_feature_names(["dir_to_target_body_x", "dir_to_target_body_y", "dir_to_target_body_z"], direction_to_target_in_body))
+            obs.extend(self.add_feature_names(["derivative_dir_to_target_body_x", "derivative_dir_to_target_body_y", "derivative_dir_to_target_body_z"], direction_to_target_in_body))
+            obs.extend(self.add_feature_names(["integral_dir_to_target_body_x", "integral_dir_to_target_body_y", "integral_dir_to_target_body_z"], direction_to_target_in_body))
 
 
             # ---------------------------------------------------------------------
@@ -513,6 +523,9 @@ class CrazyflieEnv(gym.Env):
             
             # Alignment in [-1, 1] of thrust towards the target
             thrust_alignment = np.dot(world_thrust, direction_to_target)
+            derivative_thrust_alignment = thrust_alignment - self.prev_thrust_alignment[i]
+            self.integral_thrust_alignment[i] = 0.95 * self.integral_thrust_alignment[i] + thrust_alignment
+            self.prev_thrust_alignment[i] = thrust_alignment
 
             obs.extend(self.add_feature_names(["prev_ctrl_thrust", "prev_ctrl_roll", "prev_ctrl_pitch", "prev_ctrl_yaw"], normalized_prev_ctrl))
             obs.extend(self.add_feature_names(["derivative_ctrl_thrust", "derivative_ctrl_roll", "derivative_ctrl_pitch", "derivative_ctrl_yaw"], self.derivative_control[i]))
@@ -520,7 +533,10 @@ class CrazyflieEnv(gym.Env):
             obs.extend(self.add_feature_names(["thrust_x", "thrust_y", "thrust_z"], world_thrust))
             obs.extend(self.add_feature_names(["derivative_thrust_x", "derivative_thrust_y", "derivative_thrust_z"], derivative_world_thrust))
             obs.extend(self.add_feature_names(["integral_thrust_x", "integral_thrust_y", "integral_thrust_z"], self.integral_world_thrust[i]))
-            obs.extend(self.add_feature_names(["thrust_alignment"], np.array([thrust_alignment], dtype=np.float32)))
+            obs.extend(self.add_feature_names(
+                ["thrust_alignment", "derivative_thrust_alignment", "integral_thrust_alignment"], 
+                np.array([thrust_alignment, derivative_thrust_alignment, self.integral_thrust_alignment[i]], dtype=np.float32)
+            ))
 
 
         return np.array(obs, dtype=np.float32)
