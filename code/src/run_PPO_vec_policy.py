@@ -36,8 +36,8 @@ def make_env(xml_path, rank, seed=0, num_drones=1):
 def train_PPO(
     agent: PPOAgentVec,
     envs,
-    total_timesteps: int,
-    num_steps: int,
+    total_steps: int,
+    update_steps: int,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -50,13 +50,13 @@ def train_PPO(
         The SB3 vectorized wrapper for our envs
     """
     num_envs = envs.num_envs
-    num_updates = total_timesteps // num_steps
+    num_updates = total_steps // update_steps
 
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
 
     for update in range(num_updates):
-        for _ in range(num_steps):
+        for _ in range(update_steps):
             actions, log_probs, values = agent.sample_action(obs)
             next_obs, rewards, dones, infos = envs.step(actions)
 
@@ -133,8 +133,8 @@ if __name__ == "__main__":
         help="Optionally provide a model path. If omitted, uses default PPO save path."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_timesteps", type=int, default=150_000, help="Total timesteps for training")
-    parser.add_argument("--num_steps", type=int, default=1500, help="Number of timesteps before policy updates")
+    parser.add_argument("--total_steps", type=int, default=150_000, help="Total timesteps for training")
+    parser.add_argument("--update_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
 
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     )
 
     if not args.load_model:
-        train_PPO(agent, envs, total_timesteps=args.total_timesteps, num_steps=args.num_steps)
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
@@ -183,12 +183,12 @@ if __name__ == "__main__":
         xml_path=SCENE_PATH,
         num_drones=1,
         target_pos=np.array([0.0, -0.5, 1.0], dtype=np.float32),
-        max_steps=4000,
+        max_steps=5000,
         random_initialization=False,
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env, seed=42, sleep_time=1/1640)
+    render_PPO(agent, render_env, seed=42, sleep_time=1/1000)
 
     # Feature importance for each action
     print("\nFeature importance ranking (per action):")

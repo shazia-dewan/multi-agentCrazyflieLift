@@ -207,7 +207,10 @@ class PPOAgentVec:
                 self.value_network.zero_grad(set_to_none=True)
                 obs_tensor.grad = None
                 
-                # Compute observation gradients for current action
+                # Compute observation gradients for current action w.r.t. the input observation vector
+                # Idea: Gain an understanding of which features are impactful for which actions by
+                #   looking all the way back to the input layer, not just the final hidden layer.
+                #   For action a, how sensitive is the action mean to changes in feature i?
                 mean[0, a].backward(retain_graph=True)
                 gradients = obs_tensor.grad.detach().cpu().numpy()[0]
                 
