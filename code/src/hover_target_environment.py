@@ -156,8 +156,8 @@ class CrazyflieEnv(gym.Env):
                 base_qvel = i * self.qvel_per_drone
                 
                 # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 5, TRAINING_POS_RANGE / 5)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 5, TRAINING_POS_RANGE / 5)
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
                 start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
 
                 self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
@@ -281,25 +281,32 @@ class CrazyflieEnv(gym.Env):
             dist_new = np.linalg.norm(self.target_pos - pos)
             reward += dist_old - dist_new
 
+            # Rotation rewards
+            above_the_ground = pos[2] > 0.05
+            if above_the_ground:
+                # Distance to target
+                pos_error = self.target_pos - pos
+                distance_to_target = np.linalg.norm(pos_error)
 
-            # Get direction to target in drone body frame using drones current rotation (info for rotation reward)
-            pos_error = self.target_pos - pos
-            direction_to_target = pos_error / (np.linalg.norm(pos_error) + 1e-9)
-            quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
-            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
-            direction_to_target_body = rotation_matrix.T @ direction_to_target
+                # Get direction to target in drone body frame using drones current rotation
+                direction_to_target = pos_error / (distance_to_target + 1e-9)
+                quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
+                rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+                direction_to_target_body = rotation_matrix.T @ direction_to_target
 
-            # [0, 1] based on Y distance to target (0 when close)
-            proximity_function_y = abs(np.tanh(pos_error[1]))
+                # roll_towards_target = +y_direction when rolling towards target Y and vice versa
+                roll_towards_target = np.sign(roll) * direction_to_target_body[1]
 
-            # Rolling in the direction of the target: good when far away on Y axis
-            if ctrl[1] * direction_to_target_body[1] > 0:
-                reward += 0.001 * proximity_function_y
-            
-            # Rolling away from the target: good if we are close on Y axis and counteracting velocity
-            if ctrl[1] * vel[1] < 0:
-                reward += 0.001 * (1 - proximity_function_y)
-            
+                # roll_away_from_velocity = +y_velocity when rollling away from drone Y velocity and vice versa
+                roll_away_from_velocity = -1 * np.sign(roll) * vel[1]
+
+                # Base reward for rolling, penalize large roll
+                base_roll_reward = 0.0001 / (abs(roll) + 0.1)
+
+                # Rewards for rolling towards the target and rolling to counteract velocity, both (+/-)
+                reward += roll_towards_target * base_roll_reward
+                reward += roll_away_from_velocity * base_roll_reward
+
 
             ##############################################
             # Termination and Truncation
