@@ -20,5 +20,5 @@ MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
     "models", 
-    f"ppo_model.pt"
+    "ppo_model.pt"
 )

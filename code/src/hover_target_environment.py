@@ -5,11 +5,13 @@ import mujoco
 from typing import Any, Optional
 from scipy.spatial.transform import Rotation as R
 
+from reward_system import RewardTracker
+
 BASE_HOVER_THRUST = 0.26487
-DRONE_TILT_EPISLON = np.deg2rad(10)
 TRAINING_POS_RANGE = 2.0
 TRAINING_QUAT_RANGE = np.pi / 36
-TRAINING_VEL_RANGE = 0.1
+
+STEPS_BEFORE_IDLE = 400
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -64,7 +66,7 @@ class CrazyflieEnv(gym.Env):
         self.observation_names = []
 
         # Define the observation space with n features based on how many we assign in _get_obs()
-        obs_high = np.inf * np.ones(124 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(118 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -113,6 +115,8 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.mujoco_scene, self.data)
 
+        self.starting_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
+
         # Position tracking for previous drone(s) feature
         self.prev_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.prev_pos_error = np.zeros((self.num_drones, 3), dtype=np.float32)
@@ -121,11 +125,9 @@ class CrazyflieEnv(gym.Env):
 
         # Velocity tracking for previous drone(s) feature
         self.prev_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
-        self.derivative_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
         # Angular velocities
         self.prev_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
-        self.derivative_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
         self.integral_ang_vel = np.zeros((self.num_drones, 3), dtype=np.float32)
 
         # Rotation tracking for previous drone(s) feature
@@ -148,12 +150,11 @@ class CrazyflieEnv(gym.Env):
         # If using multiple drones, offset them along X axis
         drone_spacing_x = 0.4
         drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
-        
+
         # Start drone at some random pos [X, Y, Z] and quat [w, x, y, z]
         if self.random_initialization:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
-                base_qvel = i * self.qvel_per_drone
                 
                 # Random position
                 start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
@@ -164,17 +165,8 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 1] = start_y
                 self.data.qpos[base_qpos + 2] = start_z
 
+                self.starting_pos[i] = np.array([self.data.qpos[base_qpos + 0], self.data.qpos[base_qpos + 1], self.data.qpos[base_qpos + 2]])
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
-
-                # Testing random starting YZ velocity
-                self.data.qvel[base_qvel + 0] = 0.0
-                self.data.qvel[base_qvel + 1] = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                self.data.qvel[base_qvel + 2] = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                
-                # Testing random starting X angular velocity
-                self.data.qvel[base_qvel + 3] = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                self.data.qvel[base_qvel + 4] = 0.0
-                self.data.qvel[base_qvel + 5] = 0.0
 
 
                 # Random rotation axis with small rotation angle
@@ -191,6 +183,7 @@ class CrazyflieEnv(gym.Env):
                 quat = np.array([w, x, y, z], dtype=np.float64)
                 self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
         else:
+            # Start drone(s) at consistent Z with X offset per drone
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 self.data.qpos[base_qpos + 0] = drone_offsets_x[i]
@@ -198,15 +191,13 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 2] = 1.0
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
-
-        for i in range(self.num_drones):
-            # Start drone(s) with 0 velocity
-            base_qvel = i * self.qvel_per_drone
-            self.data.qvel[base_qvel : base_qvel + self.qvel_per_drone] = 0.0
         
         self.timestep = 0
         # For each drone, track how many timesteps we have been at the same pos (detect hover or stall)
         self.same_pos_steps = np.zeros((self.num_drones, 1), dtype=np.float32)
+
+        # Define reward system
+        self.reward_tracker = RewardTracker()
 
         return self._get_obs(), {}
 
@@ -277,36 +268,51 @@ class CrazyflieEnv(gym.Env):
 
             # Reward for moving closer to target
             # Compare new & old distance to generate a per step reward (-dist_new alone may not signal improvement)
-            dist_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
-            dist_new = np.linalg.norm(self.target_pos - pos)
-            reward += dist_old - dist_new
+            distance_to_target_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
+            pos_error = self.target_pos - pos
+            distance_to_target = np.linalg.norm(pos_error)
+            distance_improvement = distance_to_target_old - distance_to_target
+            self.reward_tracker.update("distance_improvement", distance_improvement)
 
-            # Rotation rewards
+
             above_the_ground = pos[2] > 0.05
             if above_the_ground:
-                # Distance to target
-                pos_error = self.target_pos - pos
-                distance_to_target = np.linalg.norm(pos_error)
-
-                # Get direction to target in drone body frame using drones current rotation
+                # Get drone rotation matrix and direction to target in drone body frame
                 direction_to_target = pos_error / (distance_to_target + 1e-9)
                 quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
                 rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
                 direction_to_target_body = rotation_matrix.T @ direction_to_target
 
-                # roll_towards_target = +y_direction when rolling towards target Y and vice versa
+                target_proximity_function = abs(np.tanh(distance_to_target))
+
+                thrust_normalized = thrust / 0.35
+
+                # Reward for rolling towards target, scaled based on thrust and target distance (less important when close)
                 roll_towards_target = np.sign(roll) * direction_to_target_body[1]
+                roll_towards_target_scaled = 0.0001 * roll_towards_target * thrust_normalized * target_proximity_function
+                self.reward_tracker.update("roll_towards_target_scaled", roll_towards_target_scaled)
 
-                # roll_away_from_velocity = +y_velocity when rollling away from drone Y velocity and vice versa
+
+                # Reward for rolling to counteract velocity, scaled based on thrust and target distance (more important when close)
                 roll_away_from_velocity = -1 * np.sign(roll) * vel[1]
+                roll_away_from_velocity_scaled= 0.001 * roll_away_from_velocity * thrust_normalized * (1 - target_proximity_function)
+                self.reward_tracker.update("roll_away_from_velocity_scaled", roll_away_from_velocity_scaled)
 
-                # Base reward for rolling, penalize large roll
-                base_roll_reward = 0.0001 / (abs(roll) + 0.1)
+                # Penalize large angular velocity to incentivize stability, especially as we get closer to target
+                large_ang_velocity_penalty = -1 * 0.01 * abs(ang_vel[0]) / (target_proximity_function + 0.1)
+                self.reward_tracker.update("large_ang_velocity_penalty", large_ang_velocity_penalty)
 
-                # Rewards for rolling towards the target and rolling to counteract velocity, both (+/-)
-                reward += roll_towards_target * base_roll_reward
-                reward += roll_away_from_velocity * base_roll_reward
+                # Penalize large velocity as we get closer to the target
+                large_velocity_penalty = -1 * 0.001 * (abs(vel[1]) ** 3) * (1 - target_proximity_function)
+                self.reward_tracker.update("large_velocity_penalty", large_velocity_penalty)
 
+                # Penalize large rotation (deviation from neutral rotation) as we get closer to the target
+                drone_up = rotation_matrix.T @ np.array([0, 0, 1])
+                drone_up_error = 1 - np.dot(drone_up, np.array([0, 0, 1]))
+                large_rotation_penalty = -1 * drone_up_error * (1 - target_proximity_function)
+                self.reward_tracker.update("large_rotation_penalty", large_rotation_penalty)
+
+            reward = self.reward_tracker.step_total()
 
             ##############################################
             # Termination and Truncation
@@ -315,7 +321,7 @@ class CrazyflieEnv(gym.Env):
             # If we have been at the same pos (within eps) for n timesteps, terminate (hover or stall)
             if np.linalg.norm(pos - self.prev_pos[i]) < 1e-6:
                 self.same_pos_steps[i] += 1
-                if self.same_pos_steps[i] > 400:
+                if self.same_pos_steps[i] > STEPS_BEFORE_IDLE:
                     terminated = True
             else:
                 self.same_pos_steps[i] = 0
@@ -335,7 +341,7 @@ class CrazyflieEnv(gym.Env):
                 ctrl[base_ctrl + 3] - self.prev_control[i][3]
             ], dtype=np.float32)
 
-            # Update prev pos and action for next timestep (to use in observations)
+            # Update prev pos and action for next timestep
             self.prev_pos[i] = pos.copy()
             self.prev_control[i] = ctrl[base_ctrl : base_ctrl + self.ctrl_per_drone].copy()
 
@@ -443,9 +449,6 @@ class CrazyflieEnv(gym.Env):
 
             vel_derivative = vel - self.prev_vel[i]
             obs.extend(self.add_feature_names(["derivative_vel_x", "derivative_vel_y", "derivative_vel_z"], vel_derivative))
-
-            self.integral_vel[i] = 0.95 * self.integral_vel[i] + 0.05 * vel
-            obs.extend(self.add_feature_names(["integral_vel_x", "integral_vel_y", "integral_vel_z"], self.integral_vel[i]))
             self.prev_vel[i] = vel.copy()
 
 
@@ -454,9 +457,6 @@ class CrazyflieEnv(gym.Env):
 
             ang_vel_derivative = ang_vel - self.prev_ang_vel[i]
             obs.extend(self.add_feature_names(["derivative_ang_vel_x", "derivative_ang_vel_y", "derivative_ang_vel_z"], ang_vel_derivative))
-
-            self.integral_ang_vel[i] = 0.95 * self.integral_ang_vel[i] + 0.05 * ang_vel
-            obs.extend(self.add_feature_names(["integral_ang_vel_x", "integral_ang_vel_y", "integral_ang_vel_z"], self.integral_ang_vel[i]))
             self.prev_ang_vel[i] = ang_vel.copy()
 
             # Skid component (lateral velocity): Velocity - Velocity along target direction

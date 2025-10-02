@@ -7,6 +7,7 @@ import mujoco.viewer
 import torch
 from tabulate import tabulate
 
+from run_manual_control import load_manual_steps
 from constants import SCENE_PATH, MODEL_SAVE_PATH
 from PPO_vec_agent import PPOAgentVec
 from hover_target_environment import CrazyflieEnv
@@ -49,6 +50,7 @@ def train_PPO(
     envs : SubprocVecEnv or DummyVecEnv
         The SB3 vectorized wrapper for our envs
     """
+    print("\nBeginning PPO training...")
     num_envs = envs.num_envs
     num_updates = total_steps // update_steps
 
@@ -116,7 +118,7 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, sleep_time
 
             if done:
                 break
-        print(f"Simulation ended with total reward {total_reward:.2f}")
+    print(f"\nSimulation complete, total reward: {total_reward:.6f}\n")
 
 
 
@@ -131,6 +133,11 @@ if __name__ == "__main__":
         const=True,
         default=False,
         help="Optionally provide a model path. If omitted, uses default PPO save path."
+    )
+    parser.add_argument(
+        "--imitate_manual_steps",
+        action="store_true",
+        help="Before PPO training, bootstrap the model offline from manual control steps."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
     parser.add_argument("--total_steps", type=int, default=150_000, help="Total timesteps for training")
@@ -163,6 +170,15 @@ if __name__ == "__main__":
     )
 
     if not args.load_model:
+        # Pre-train drone with steps from manual control 
+        if args.imitate_manual_steps:
+            load_manual_steps(agent, "../model_manual_step_data")
+
+            # Bootstrap policy update using demo buffer
+            _, _, last_values = agent.sample_action(agent.buffer.observations[-1], deterministic=True)
+            agent.update_policy(last_values)
+    
+        # Train the agent with PPO
         train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
@@ -188,7 +204,7 @@ if __name__ == "__main__":
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env, seed=42, sleep_time=1/100)
+    render_PPO(agent, render_env, seed=42, sleep_time=1/1000)
 
     # Feature importance for each action
     print("\nFeature importance ranking (per action):")
@@ -218,7 +234,6 @@ if __name__ == "__main__":
 
     print(tabulate(rows_formatted, headers=headers, tablefmt="fancy_grid"))
 
-
     # Save feature importance results to a CSV
     out_dir = os.path.join(os.path.dirname(__file__), "..", "output_feature_importance")
     os.makedirs(out_dir, exist_ok=True)
@@ -230,4 +245,20 @@ if __name__ == "__main__":
         for r in rows:
             writer.writerow(r)
 
-    print(f"\nFeature importance CSV saved to {out_path}")
+    print(f"\nFeature importance CSV saved to {out_path}\n")
+
+    # Track which rewards/penalties were important during this run
+    print(f"Reward summary:\n")
+    summary = render_env.reward_tracker.summary()
+
+    print(f"Total reward: {summary['total']:.6f}")
+
+    abs_total = 0
+    for name, stats in summary["reward_summary"].items():
+        abs_total += stats["abs_sum"]
+    
+    rows = []
+    for name, stats in summary["reward_summary"].items():
+        rows.append([name, stats["sum"], stats["abs_sum"], f"{(100 * stats['abs_sum'] / abs_total):.2f}%"])
+    
+    print(tabulate(rows, headers=["Name", "Sum (+/-)", "Absolute Sum", "Impact Ratio"], floatfmt=".6f", tablefmt="fancy_grid"))
