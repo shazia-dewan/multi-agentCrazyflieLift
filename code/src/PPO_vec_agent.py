@@ -256,14 +256,29 @@ class PPOAgentVec:
         """
         self.buffer.store(observations, actions, rewards, terminateds, log_probs, values)
 
-    def compute_returns(self, last_values: np.ndarray | None = None) -> np.ndarray:
+
+    def compute_gae(self, last_values: np.ndarray | None = None, lamda: float = 0.95) -> tuple[np.ndarray, np.ndarray]:
         """
-        Compute discounted Monte Carlo returns for the stored trajectory.
+        Compute GAE (Generalized Advantage Estimation) advantages and returns.
+        GAE computes a lower variance advantage estimate when compared to discounted Monte Carlo by
+        adding the lambda factor which interpolates MC and TD-style estimation (balance variance with bias).
 
         Parameters
         ----------
         last_values : None or np.ndarray of shape (num_envs,)
-            Value estimates for the final states (used to bootstrap values from critic).
+            Critic value estimates for the final states across envs (used for bootstrapping if episode was truncated).
+        lamda : float
+            GAE smoothing parameter
+            - λ=1: high variance and unbiased (Monte Carlo-like), λ=0: low variance and biased (TD-like)
+
+        Returns
+        -------
+        advantages_flat : np.ndarray of shape (T * num_envs,)
+            Advantage estimates for each timestep in the trajectory (used for actor updates).
+            - Example: [t0_env0_advantage, t0_env1_advantage, ..., t1_env0_advantage, ...]
+        returns_flat : np.ndarray of shape (T * num_envs,)
+            Discounted returns for each timestep in the trajectory (used for critic updates).
+            - Example: [t0_env0_return, t0_env1_return, ..., t1_env0_return, ...]
 
         Returns
         -------
@@ -276,37 +291,53 @@ class PPOAgentVec:
 
         # Empty buffer
         if T == 0:
-            return np.array([])
+            return np.array([]), np.array([])
 
-        # Episode ended naturally (termination)
+        # Initialize values for bootstrapping
+        # If episode ended naturally (termination)
         #   -> returns are fully observed, so no need to bootstrap
-        #   -> initialize R = [0, 0, ...] so backward loop just propagates actual rewards
-        # Episode ended "early" after a fixed number of steps (truncation)
+        #   -> initialize next_values = [0, 0, ...] so backward loop just propagates actual rewards
+        # If episode ended "early" after a fixed number of steps (truncation)
         #   -> bootstrap the missing future rewards with critic’s estimate of final state values
-        #   -> initialize R to [pred_value_1, pred_value_2...]
+        #   -> initialize next_values to [pred_value_1, pred_value_2...]
         if last_values is None:
-            R = np.zeros(num_envs, dtype=np.float32)
+            next_values = np.zeros(num_envs, dtype=np.float32)
         else:
-            R = np.asarray(last_values).reshape(-1).astype(np.float32)
+            next_values = np.asarray(last_values).reshape(-1).astype(np.float32)
 
-        # Iterate backward over timesteps, populate per-timestep returns
+        advantages = [None] * T
         returns = [None] * T
+
+        # Running advantage buffer (GAE)
+        gae = np.zeros(num_envs, dtype=np.float32)
+
+        # Iterate backward through trajectory, populate per-timestep advantages and returns
         for t in reversed(range(T)):
-            # Sample rewards and end conditions at time t and flatten to shape (num_envs,)
+            # Sample rewards, state values, and end conditions at time t and flatten to shape (num_envs,)
             rewards_t = np.asarray(self.buffer.rewards[t]).reshape(-1).astype(np.float32)
+            state_values_t = np.asarray(self.buffer.state_values[t]).reshape(-1).astype(np.float32)
             terminateds_t = np.asarray(self.buffer.terminateds[t]).reshape(-1).astype(np.float32)
 
-            # Terminated episodes (end with terminated = True = 1) --> Use actual returns
-            #   For timesteps where terminated = True, just use actual return (1.0 - terminateds_t = 0 -> R = rewards_t)
-            #   For timesteps where terminated != True, propagate discounted (gamma) return values from real final states
-            # Truncated episodes (end with terminated = False = 0) --> Bootstrap using critic predicted value
-            #   For every R, propagate the discounted (gamma) predicted returns from the critic estimate
-            R = rewards_t + self.gamma * R * (1.0 - terminateds_t)
-            returns[t] = R.copy()
+            # Bootstrap with critic if the episode is not terminal
+            # For terminal episodes, 1.0 - terminateds_t = 0 -> reward_delta = rewards_t - state_values_t
+            # For truncated episodes, reward_delta = rewards_t + self.gamma * next_values - state_values_t
+            #    Propagates discounted (gamma) returns from the critic estimate rather than actual return
+            reward_delta = rewards_t + self.gamma * next_values * (1.0 - terminateds_t) - state_values_t
 
-        # Flatten returns in time-major order of shape (T * num_envs,)
-        returns_flat = np.concatenate([r.reshape(-1, ) for r in returns], axis=0)
-        return returns_flat
+            # Update running advantage estimate, for terminal episodes, gae = reward_delta
+            gae = reward_delta + self.gamma * lamda * (1.0 - terminateds_t) * gae
+
+            advantages[t] = gae.copy()
+            returns[t] = (advantages[t] + state_values_t).copy()
+
+            # Prepare next value (shift one step back in time for propagation)
+            next_values = state_values_t
+
+        # Flatten in time-major order
+        advantages_flat = np.concatenate([a.reshape(-1,) for a in advantages], axis=0)
+        returns_flat = np.concatenate([r.reshape(-1,) for r in returns], axis=0)
+
+        return advantages_flat, returns_flat
 
 
     def _flatten_buffer(self, last_values: np.ndarray | None = None):
@@ -317,33 +348,32 @@ class PPOAgentVec:
         -------
         observations : Tensor of shape (T * num_envs, obs_dim)
         actions : Tensor of shape (T * num_envs, action_dim)
+        advantages : Tensor of shape (T * num_envs, action_dim)
         returns : Tensor of shape (T * num_envs,)
         old_log_probs : Tensor of shape (T * num_envs,)
-        state_values : Tensor of shape (T * num_envs,)
         """
         T = self.buffer.num_steps()
         if T == 0:
             return None
 
-        # Observations: list of T arrays each (num_envs, obs_dim) flattens to (T * num_envs, obs_dim)
-        # Actions: list of T arrays each (num_envs, action_dim) flattens to (T * num_envs, obs_dim)
-        # Returns already flattened from compute_returns() (T * num_envs,)
+        # Observations: list of T arrays each (num_envs, obs_dim), flattens to (T * num_envs, obs_dim)
+        # Actions: list of T arrays each (num_envs, action_dim), flattens to (T * num_envs, obs_dim)
+        # Returns and advantages already flattened from compute_gae() (T * num_envs,)
         observations_np = np.concatenate(self.buffer.observations, axis=0)
         actions_np = np.concatenate(self.buffer.actions, axis=0)
-        returns_np = self.compute_returns(last_values)
+        advantages_np, returns_np = self.compute_gae(last_values)
 
-        # log_probs and values are of shape (num_envs,) and flatten to (T*num_envs,)
-        logp_t = torch.cat(self.buffer.log_probs, dim=0)
-        vals_t = torch.cat(self.buffer.state_values, dim=0)
+        # log_probs are of shape (num_envs,), flattens to shape (T*num_envs,)
+        log_probs_t = torch.cat(self.buffer.log_probs, dim=0)
 
         # Convert numpy to tensors on device
         observations_t = torch.FloatTensor(observations_np).to(self.device)
         actions_t = torch.FloatTensor(actions_np).to(self.device)
+        advantages_t = torch.FloatTensor(advantages_np).to(self.device)
         returns_t = torch.FloatTensor(returns_np).to(self.device)
-        old_log_probs_t = logp_t.to(self.device)
-        state_values_t = vals_t.to(self.device)
+        old_log_probs_t = log_probs_t.to(self.device)
 
-        return observations_t, actions_t, returns_t, old_log_probs_t, state_values_t
+        return observations_t, actions_t, advantages_t, returns_t, old_log_probs_t
 
     def update_policy(self, last_values: np.ndarray | None = None) -> None:
         """
@@ -367,10 +397,11 @@ class PPOAgentVec:
         if flattened is None:
             print("Buffer empty: nothing to update.")
             return
-        observations, actions, returns, old_log_probs, state_values = flattened
+        observations, actions, advantages, returns, old_log_probs = flattened
 
-        # Advantage function = returns - value estimates
-        advantages = (returns - state_values).detach()
+        # Normalize advantages
+        advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-9)
+        advantages = advantages.detach()
 
         # Total number of collected transitions
         N = observations.shape[0]

@@ -292,8 +292,26 @@ class CrazyflieEnv(gym.Env):
                 # Reward/penalty for rolling away from/into velocity on drone Y (roll-controlled) axis to counteract velocity
                 velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
                 velocity_direction_body = rotation_matrix.T @ velocity_direction
-                roll_away_from_velocity = -1 * np.sign(roll) * velocity_direction_body[1] * base_roll_reward
+                roll_away_from_velocity = -0.5 * np.sign(roll) * velocity_direction_body[1] * base_roll_reward
                 self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
+
+
+                # # Penalize large angular velocity to incentivize stability
+                # large_ang_velocity_penalty = -1 * 0.001
+                # large_ang_velocity = large_ang_velocity_penalty * np.linalg.norm(ang_vel)
+                # self.reward_tracker.update("large_ang_velocity", large_ang_velocity)
+                # print(large_ang_velocity)
+
+                # # Penalize large velocity
+                # large_velocity_penalty = -1 * 0.001
+                # large_velocity = large_velocity_penalty * (np.linalg.norm(vel) ** 3)
+                # self.reward_tracker.update("large_velocity", large_velocity)
+
+                # # Penalize large rotation (deviation from neutral rotation)
+                # drone_up_error = 1 - np.dot(rotation_matrix.T @ np.array([0, 0, 1]), np.array([0, 0, 1]))
+                # large_rotation_penalty = -1 * 0.1
+                # large_rotation = large_rotation_penalty * drone_up_error
+                # self.reward_tracker.update("large_rotation_penalty", large_rotation)
             else:
                 self.reward_tracker.update("roll_towards_target", 0.0)
                 self.reward_tracker.update("roll_away_from_velocity", 0.0)

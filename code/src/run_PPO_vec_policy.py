@@ -82,7 +82,7 @@ def train_PPO(
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
-        # Terminal episodes will not bootstrapped since the PPO agent compute_returns() method handles the terminal case
+        # Terminal episodes will not bootstrapped since the PPO agent compute_gae() method handles the terminal case
         _, _, last_values = agent.sample_action(obs, deterministic=True)
         agent.update_policy(last_values)
 
@@ -200,7 +200,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.5, 1.0], dtype=np.float32),
         max_steps=5000,
         random_initialization=False,
         debug=True
