@@ -7,6 +7,7 @@
 import datetime
 import os
 import time
+from tabulate import tabulate
 import torch
 import numpy as np
 import mujoco.viewer
@@ -29,7 +30,7 @@ ROLL_STEP   = 0.001
 PITCH_STEP  = 0.001
 YAW_STEP    = 0.001
 
-TRAINING_POS_RANGE = 1.0
+TRAINING_POS_RANGE = 2.0
 
 # Current pressed keys
 pressed_keys = set()
@@ -139,7 +140,7 @@ if __name__ == "__main__":
         xml_path=SCENE_PATH,
         num_drones=1,
         target_pos=np.array([0.0, start_y, start_z], dtype=np.float32),
-        max_steps=1500,
+        max_steps=3000,
         random_initialization=False,
         debug=True
     )
@@ -208,8 +209,25 @@ if __name__ == "__main__":
                 break
 
     listener.stop()
-    print(f"Episode ended. Total reward: {total_reward:.2f}")
 
+    # Track which rewards/penalties were important during this run
+    print(f"Reward summary:\n")
+    summary = env.reward_tracker.summary()
+
+    print(f"Total reward: {summary['total']:.6f}")
+
+    abs_total = 0
+    for name, stats in summary["reward_summary"].items():
+        abs_total += stats["abs_sum"]
+    
+    rows = []
+    for name, stats in summary["reward_summary"].items():
+        rows.append([name, stats["sum"], stats["abs_sum"], f"{(100 * stats['abs_sum'] / abs_total):.2f}%"])
+    
+    print(tabulate(rows, headers=["Name", "Sum (+/-)", "Absolute Sum", "Impact Ratio"], floatfmt=".6f", tablefmt="fancy_grid"))
+
+
+    # Save manual steps to pickle file
     out_dir = os.path.join(os.path.dirname(__file__), "..", "model_manual_step_data")
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -217,7 +235,7 @@ if __name__ == "__main__":
 
     with open(out_path, "wb") as f:
         pickle.dump(step_data, f)
-    print(f"Saved manual demonstration to {out_path}")
+    print(f"Saved manual episode to {out_path}")
 
 
 

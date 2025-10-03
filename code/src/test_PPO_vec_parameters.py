@@ -109,9 +109,10 @@ def check_hyperparameter(args, param_name: str, values: list[Union[int, float]])
         train_PPO(
             agent, 
             envs, 
-            total_timesteps=args.total_timesteps,
-            num_steps=args.num_steps,
-            print_logs=False, save_model=False
+            total_steps=args.total_steps,
+            update_steps=args.update_steps,
+            print_logs=False,
+            save_model=False
         )
 
         avg_reward = evaluate(agent, env_fns[0], num_runs=args.num_runs)
@@ -150,9 +151,10 @@ def check_env_max_steps(args, max_step_values: list[int]) -> None:
         train_PPO(
             agent,
             envs,
-            total_timesteps=args.total_timesteps,
-            num_steps=args.num_steps,
-            print_logs=False, save_model=False
+            total_steps=args.total_steps,
+            update_steps=args.update_steps,
+            print_logs=False,
+            save_model=False
         )
 
         avg_reward = evaluate(agent, env_fns[0], num_runs=args.num_runs)
@@ -168,12 +170,12 @@ def check_training_schedule(args, schedule_values: list[tuple[int, int]]) -> Non
         Used to specific the number of trial runs for each hyperparameter-trained model
 
     schedule_values : list[tuple[int, int]]
-        Pairs of (total_timesteps, num_steps)
+        Pairs of (total_steps, update_steps)
     """
     print("\nTesting PPO with different training schedules")
     results = []
 
-    for total_timesteps, num_steps in schedule_values:
+    for total_steps, update_steps in schedule_values:
         env_fns = [make_env(SCENE_PATH, rank=i, seed=42) for i in range(args.num_envs)]
         envs = SubprocVecEnv(env_fns) if args.num_envs > 1 else DummyVecEnv(env_fns)
 
@@ -184,20 +186,20 @@ def check_training_schedule(args, schedule_values: list[tuple[int, int]]) -> Non
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
 
-        print(f"Training with total_timesteps={total_timesteps}, num_steps={num_steps}...")
+        print(f"Training with total_steps={total_steps}, update_steps={update_steps}...")
         train_PPO(
             agent,
             envs,
-            total_timesteps=total_timesteps,
-            num_steps=num_steps,
+            total_steps=total_steps,
+            update_steps=update_steps,
             print_logs=False,
             save_model=False
         )
 
         avg_reward = evaluate(agent, env_fns[0], num_runs=args.num_runs)
         results.append({
-            "total_timesteps": total_timesteps,
-            "num_steps": num_steps,
+            "total_steps": total_steps,
+            "update_steps": update_steps,
             "average_reward": avg_reward
         })
 
@@ -206,21 +208,23 @@ def check_training_schedule(args, schedule_values: list[tuple[int, int]]) -> Non
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test vectorized PPO with varying parameters")
-    parser.add_argument("--num_runs", type=int, default=5, help="Number of evaluation runs per trained model")
+    parser.add_argument("--num_runs", type=int, default=20, help="Number of evaluation runs per trained model")
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel envs during training")
-    parser.add_argument("--total_timesteps", type=int, default=100_000, help="Default total training timesteps")
-    parser.add_argument("--num_steps", type=int, default=1000, help="Default rollout steps per update")
+    parser.add_argument("--total_steps", type=int, default=150_000, help="Default total training timesteps")
+    parser.add_argument("--update_steps", type=int, default=1500, help="Default rollout steps per update")
     args = parser.parse_args()
 
-    # check_hyperparameter(args, "lr", [7e-4, 9e-4, 1e-3, 3e-3])
-    # check_hyperparameter(args, "gamma", [0.95, 0.97, 0.99, 0.995])
-    # check_hyperparameter(args, "clip_eps", [0.2, 0.3])
-    check_hyperparameter(args, "update_epochs", [1, 2, 4, 6])
-    check_hyperparameter(args, "num_minibatches", [1, 2, 4, 6])
-    check_hyperparameter(args, "entropy_coefficient", [0.2, 0.3, 0.5, 0.8])
-    # check_hyperparameter(args, "kl_threshold", [0.2, 0.3, 0.4, 0.5])
+    # General hyperparameter tests
+    # check_hyperparameter(args, "lr", [3e-3, 1e-3, 7e-4, 5e-4])
+    # check_hyperparameter(args, "gamma", [0.98, 0.99, 0.995])
+    # check_hyperparameter(args, "clip_eps", [0.15, 0.2, 0.25])
+    # check_hyperparameter(args, "update_epochs", [1, 2, 3, 4])
+    # check_hyperparameter(args, "num_minibatches", [1, 2, 3, 4])
+    # check_hyperparameter(args, "entropy_coefficient", [0.0, 0.3, 0.5, 0.8])
+    # check_hyperparameter(args, "kl_threshold", [0.2, 0.25, 0.3, 0.35])
 
     # Environment variations
-    check_env_max_steps(args, [200, 400])
+    # check_env_max_steps(args, [200, 400])
 
+    # Training schedule
     # check_training_schedule(args, [(50_000, 200), (50_000, 400)])

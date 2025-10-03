@@ -97,13 +97,13 @@ class PPOAgentVec:
         self,
         obs_dim: int,
         action_dim: int,
-        lr: float = 1e-3,
+        lr: float = 3e-3,
         gamma: float = 0.99,
         clip_eps: float = 0.2,
         update_epochs: int = 2,
-        num_minibatches: int = 2,
-        entropy_coefficient: float = 0.3,
-        kl_threshold: float = 0.3,
+        num_minibatches: int = 4,
+        entropy_coefficient: float = 0.01,
+        kl_threshold: float = 0.35,
         device: str = "cpu",
         track_obs_gradient: bool = False
     ):
@@ -435,7 +435,10 @@ class PPOAgentVec:
                 clipped_objective = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * advantages_batch
                 final_objective = torch.min(unclipped_objective, clipped_objective)
 
-                # Add entropy and take -(mean of L_CLIP objective) since PyTorch optimizers perform gradient descent
+                # PyTorch optimizers perform gradient descent (minimize loss)
+                #   So take  -(mean of L_CLIP objective) and subtract entropy sum of action dimension.
+                #   Variant action distributions have high entropy (uncertainty), so policy_loss is minimized
+                #   more and the policy is motivated to stay exploratory rather than collapsing too early
                 entropy = dist.entropy().sum(dim=-1).mean()
                 policy_loss = -final_objective.mean() - self.entropy_coefficient * entropy
 

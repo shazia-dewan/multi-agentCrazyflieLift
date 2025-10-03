@@ -193,8 +193,6 @@ class CrazyflieEnv(gym.Env):
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
         
         self.timestep = 0
-        # For each drone, track how many timesteps we have been at the same pos (detect hover or stall)
-        self.same_pos_steps = np.zeros((self.num_drones, 1), dtype=np.float32)
 
         # Define reward system
         self.reward_tracker = RewardTracker()
@@ -261,7 +259,6 @@ class CrazyflieEnv(gym.Env):
             ctrl[base_ctrl + 2] = 0.0
             ctrl[base_ctrl + 3] = 0.0
 
-
             ##############################################
             # Rewards
             ##############################################
@@ -274,43 +271,32 @@ class CrazyflieEnv(gym.Env):
             distance_improvement = distance_to_target_old - distance_to_target
             self.reward_tracker.update("distance_improvement", distance_improvement)
 
-
             above_the_ground = pos[2] > 0.05
             if above_the_ground:
-                # Get drone rotation matrix and direction to target in drone body frame
-                direction_to_target = pos_error / (distance_to_target + 1e-9)
+                y_target_proximity_function = abs(np.tanh(pos_error[1]))
+
+                # Get drone rotation matrix for drone-relative coordinates
                 quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
                 rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+
+                # Base reward for rolling, penalize large roll
+                base_roll_reward = 0.001 / (abs(roll) + 1)
+
+                # Reward/penalty for rolling towards/away from target on drone Y (roll-controlled) axis
+                # Scaled by the proximity function because rolling towards target is more important when far away
+                direction_to_target = pos_error / (distance_to_target + 1e-9)
                 direction_to_target_body = rotation_matrix.T @ direction_to_target
+                roll_towards_target = np.sign(roll) * direction_to_target_body[1] * base_roll_reward * y_target_proximity_function
+                self.reward_tracker.update("roll_towards_target", roll_towards_target)
 
-                target_proximity_function = abs(np.tanh(distance_to_target))
-
-                thrust_normalized = thrust / 0.35
-
-                # Reward for rolling towards target, scaled based on thrust and target distance (less important when close)
-                roll_towards_target = np.sign(roll) * direction_to_target_body[1]
-                roll_towards_target_scaled = 0.0001 * roll_towards_target * thrust_normalized * target_proximity_function
-                self.reward_tracker.update("roll_towards_target_scaled", roll_towards_target_scaled)
-
-
-                # Reward for rolling to counteract velocity, scaled based on thrust and target distance (more important when close)
-                roll_away_from_velocity = -1 * np.sign(roll) * vel[1]
-                roll_away_from_velocity_scaled= 0.001 * roll_away_from_velocity * thrust_normalized * (1 - target_proximity_function)
-                self.reward_tracker.update("roll_away_from_velocity_scaled", roll_away_from_velocity_scaled)
-
-                # Penalize large angular velocity to incentivize stability, especially as we get closer to target
-                large_ang_velocity_penalty = -1 * 0.01 * abs(ang_vel[0]) / (target_proximity_function + 0.1)
-                self.reward_tracker.update("large_ang_velocity_penalty", large_ang_velocity_penalty)
-
-                # Penalize large velocity as we get closer to the target
-                large_velocity_penalty = -1 * 0.001 * (abs(vel[1]) ** 3) * (1 - target_proximity_function)
-                self.reward_tracker.update("large_velocity_penalty", large_velocity_penalty)
-
-                # Penalize large rotation (deviation from neutral rotation) as we get closer to the target
-                drone_up = rotation_matrix.T @ np.array([0, 0, 1])
-                drone_up_error = 1 - np.dot(drone_up, np.array([0, 0, 1]))
-                large_rotation_penalty = -1 * drone_up_error * (1 - target_proximity_function)
-                self.reward_tracker.update("large_rotation_penalty", large_rotation_penalty)
+                # Reward/penalty for rolling away from/into velocity on drone Y (roll-controlled) axis to counteract velocity
+                velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
+                velocity_direction_body = rotation_matrix.T @ velocity_direction
+                roll_away_from_velocity = -1 * np.sign(roll) * velocity_direction_body[1] * base_roll_reward
+                self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
+            else:
+                self.reward_tracker.update("roll_towards_target", 0.0)
+                self.reward_tracker.update("roll_away_from_velocity", 0.0)
 
             reward = self.reward_tracker.step_total()
 
@@ -318,13 +304,18 @@ class CrazyflieEnv(gym.Env):
             # Termination and Truncation
             ##############################################
 
-            # If we have been at the same pos (within eps) for n timesteps, terminate (hover or stall)
-            if np.linalg.norm(pos - self.prev_pos[i]) < 1e-6:
-                self.same_pos_steps[i] += 1
-                if self.same_pos_steps[i] > STEPS_BEFORE_IDLE:
-                    terminated = True
-            else:
-                self.same_pos_steps[i] = 0
+            # Crash
+            if not above_the_ground:
+                self.reward_tracker.update("crash", -1)
+                reward = self.reward_tracker.step_total()
+                terminated = True
+
+            # If we go much further from the target compared to starting pos, terminate with out of bounds penalty
+            initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
+            if distance_to_target > initial_distance_to_target + 1:
+                self.reward_tracker.update("out_of_bounds", -1)
+                reward = self.reward_tracker.step_total()
+                terminated = True
 
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps
@@ -354,7 +345,11 @@ class CrazyflieEnv(gym.Env):
         mujoco.mj_step(self.mujoco_scene, self.data)
         obs = self._get_obs()
 
-        return obs, reward, terminated, truncated, {}
+        info = {
+            "terminated": terminated,
+            "truncated": truncated
+        }
+        return obs, reward, terminated, truncated, info
 
 
     def _get_obs(self) -> np.ndarray:
@@ -592,7 +587,7 @@ class CrazyflieEnv(gym.Env):
 
     def render(self) -> None:
         """
-        Render the model in MuJoCo
+        Render the scene in MuJoCo
         """
         if self.viewer is None:
             self.viewer = mujoco.viewer.launch_passive(self.mujoco_scene, self.data)

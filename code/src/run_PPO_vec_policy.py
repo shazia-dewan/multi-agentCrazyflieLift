@@ -62,7 +62,7 @@ def train_PPO(
             actions, log_probs, values = agent.sample_action(obs)
             next_obs, rewards, dones, infos = envs.step(actions)
 
-            # SB3 VecEnv treats step as {next_obs, rewards, dones, infos} so recover terminated & truncated here
+            # SB3 VecEnv treats step as {next_obs, rewards, dones, infos} so recover terminated & truncated here from infos
             # https://stable-baselines3.readthedocs.io/en/master/guide/vec_envs.html#
             terminateds = np.array([info.get("terminated", False) for info in infos])
             truncateds  = np.array([info.get("truncated", False) or info.get("TimeLimit.truncated", False) for info in infos])
@@ -94,6 +94,8 @@ def train_PPO(
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
+        
+    print("PPO Training Complete")
 
 
 ####################
@@ -118,7 +120,7 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, sleep_time
 
             if done:
                 break
-    print(f"\nSimulation complete, total reward: {total_reward:.6f}\n")
+    print("\nSimulation complete.\n")
 
 
 
@@ -135,7 +137,7 @@ if __name__ == "__main__":
         help="Optionally provide a model path. If omitted, uses default PPO save path."
     )
     parser.add_argument(
-        "--imitate_manual_steps",
+        "--manual_steps",
         action="store_true",
         help="Before PPO training, bootstrap the model offline from manual control steps."
     )
@@ -171,7 +173,7 @@ if __name__ == "__main__":
 
     if not args.load_model:
         # Pre-train drone with steps from manual control 
-        if args.imitate_manual_steps:
+        if args.manual_steps:
             load_manual_steps(agent, "../model_manual_step_data")
 
             # Bootstrap policy update using demo buffer
@@ -198,7 +200,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.5, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
         max_steps=5000,
         random_initialization=False,
         debug=True
