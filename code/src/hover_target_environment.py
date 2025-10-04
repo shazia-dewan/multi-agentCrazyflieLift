@@ -66,7 +66,7 @@ class CrazyflieEnv(gym.Env):
         self.observation_names = []
 
         # Define the observation space with n features based on how many we assign in _get_obs()
-        obs_high = np.inf * np.ones(118 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(161 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -137,15 +137,12 @@ class CrazyflieEnv(gym.Env):
         self.prev_rotation_matrix = np.tile(np.eye(3, dtype=np.float32), (self.num_drones, 1, 1))
         self.integral_rotation_matrix = np.tile(np.eye(3, dtype=np.float32), (self.num_drones, 1, 1))
 
-
         # Control tracking for previous drone(s) feature
         self.prev_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
-        self.derivative_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
-        self.integral_control = np.zeros((self.num_drones, self.ctrl_per_drone), dtype=np.float32)
-        self.prev_world_thrust = np.zeros((self.num_drones, 3), dtype=np.float32)
-        self.integral_world_thrust = np.zeros((self.num_drones, 3), dtype=np.float32)
-        self.prev_thrust_alignment = np.zeros(self.num_drones, dtype=np.float32)
-        self.integral_thrust_alignment = np.zeros(self.num_drones, dtype=np.float32)
+
+        # Store last n control actions (action history) to compensate for thrust motor lag
+        self.action_history_len = 16
+        self.action_history = np.zeros((self.num_drones, self.action_history_len, self.ctrl_per_drone), dtype=np.float32)
         
         # If using multiple drones, offset them along X axis
         drone_spacing_x = 0.4
@@ -259,6 +256,11 @@ class CrazyflieEnv(gym.Env):
             ctrl[base_ctrl + 2] = 0.0
             ctrl[base_ctrl + 3] = 0.0
 
+            # Update action history: shift left and append current action
+            self.action_history[i, :-1] = self.action_history[i, 1:]
+            self.action_history[i, -1] = ctrl[base_ctrl: base_ctrl + self.ctrl_per_drone]
+
+
             ##############################################
             # Rewards
             ##############################################
@@ -271,66 +273,47 @@ class CrazyflieEnv(gym.Env):
             distance_improvement = distance_to_target_old - distance_to_target
             self.reward_tracker.update("distance_improvement", distance_improvement)
 
+            # Get drone rotation matrix for drone-relative coordinates
+            quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
+            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+
             above_the_ground = pos[2] > 0.05
             if above_the_ground:
                 y_target_proximity_function = abs(np.tanh(pos_error[1]))
-
-                # Get drone rotation matrix for drone-relative coordinates
-                quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
-                rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
-
-                # Base reward for rolling, penalize large roll
-                base_roll_reward = 0.001 / (abs(roll) + 1)
 
                 # Reward/penalty for rolling towards/away from target on drone Y (roll-controlled) axis
                 # Scaled by the proximity function because rolling towards target is more important when far away
                 direction_to_target = pos_error / (distance_to_target + 1e-9)
                 direction_to_target_body = rotation_matrix.T @ direction_to_target
-                roll_towards_target = np.sign(roll) * direction_to_target_body[1] * base_roll_reward * y_target_proximity_function
+                roll_towards_target = 0.001 * np.sign(roll) * direction_to_target_body[1] * y_target_proximity_function
                 self.reward_tracker.update("roll_towards_target", roll_towards_target)
 
                 # Reward/penalty for rolling away from/into velocity on drone Y (roll-controlled) axis to counteract velocity
                 velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
                 velocity_direction_body = rotation_matrix.T @ velocity_direction
-                roll_away_from_velocity = -0.5 * np.sign(roll) * velocity_direction_body[1] * base_roll_reward
+                roll_away_from_velocity = 0.0005 * -np.sign(roll) * velocity_direction_body[1]
                 self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
-
-
-                # # Penalize large angular velocity to incentivize stability
-                # large_ang_velocity_penalty = -1 * 0.001
-                # large_ang_velocity = large_ang_velocity_penalty * np.linalg.norm(ang_vel)
-                # self.reward_tracker.update("large_ang_velocity", large_ang_velocity)
-                # print(large_ang_velocity)
-
-                # # Penalize large velocity
-                # large_velocity_penalty = -1 * 0.001
-                # large_velocity = large_velocity_penalty * (np.linalg.norm(vel) ** 3)
-                # self.reward_tracker.update("large_velocity", large_velocity)
-
-                # # Penalize large rotation (deviation from neutral rotation)
-                # drone_up_error = 1 - np.dot(rotation_matrix.T @ np.array([0, 0, 1]), np.array([0, 0, 1]))
-                # large_rotation_penalty = -1 * 0.1
-                # large_rotation = large_rotation_penalty * drone_up_error
-                # self.reward_tracker.update("large_rotation_penalty", large_rotation)
             else:
                 self.reward_tracker.update("roll_towards_target", 0.0)
                 self.reward_tracker.update("roll_away_from_velocity", 0.0)
 
+            # Survival bonus
+            self.reward_tracker.update("survival", 0.0001)
             reward = self.reward_tracker.step_total()
 
             ##############################################
             # Termination and Truncation
             ##############################################
 
-            # Crash
+            # Crash, terminate with penalty
             if not above_the_ground:
                 self.reward_tracker.update("crash", -1)
                 reward = self.reward_tracker.step_total()
                 terminated = True
 
-            # If we go much further from the target compared to starting pos, terminate with out of bounds penalty
+            # Out of bounds, terminate with penalty (if we go further from the target compared to starting pos)
             initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
-            if distance_to_target > initial_distance_to_target + 1:
+            if distance_to_target > initial_distance_to_target + 0.1:
                 self.reward_tracker.update("out_of_bounds", -1)
                 reward = self.reward_tracker.step_total()
                 terminated = True
@@ -338,19 +321,7 @@ class CrazyflieEnv(gym.Env):
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps
 
-            ##############################################
-            # Next-state update
-            ##############################################
-
-            # Track how the action changes between steps (1-step derivative)
-            self.derivative_control[i] = np.array([
-                (2 * (ctrl[base_ctrl + 0] / 0.35) - 1) - (2 * (self.prev_control[i][0] / 0.35) - 1),
-                ctrl[base_ctrl + 1] - self.prev_control[i][1],
-                ctrl[base_ctrl + 2] - self.prev_control[i][2],
-                ctrl[base_ctrl + 3] - self.prev_control[i][3]
-            ], dtype=np.float32)
-
-            # Update prev pos and action for next timestep
+            # Update prev pos for next timestep
             self.prev_pos[i] = pos.copy()
             self.prev_control[i] = ctrl[base_ctrl : base_ctrl + self.ctrl_per_drone].copy()
 
@@ -437,7 +408,6 @@ class CrazyflieEnv(gym.Env):
             # Update prev pos and derivative error
             self.prev_pos_error[i] = pos_error.copy()
             self.derivative_prev_pos_error[i] = derivative_error.copy()
-
 
 
             # ---------------------------------------------------------------------
@@ -557,47 +527,19 @@ class CrazyflieEnv(gym.Env):
 
             # ---------------------------------------------------------------------
             # Control (action) engineered features
-            # Derivative control updated in step()
             # ---------------------------------------------------------------------
-
-            # normalized_prev_ctrl stores normalized [-1, 1] previous action controls
-            # Roll/Pitch/Yaw each operate by adjusting the relative motor speed for 2/4 of the drone motors
-            # The strength relative to thrust: More thrust --> more roll/pitch/yaw, so scale roll/pitch/yaw by thrust
-            normalized_prev_ctrl = np.array([
-                2 * (self.prev_control[i][0] / 0.35) - 1,
-                self.prev_control[i][1] * (self.prev_control[i][0] / 0.35),
-                self.prev_control[i][2] * (self.prev_control[i][0] / 0.35),
-                self.prev_control[i][3] * (self.prev_control[i][0] / 0.35)
-            ], dtype=np.float32)
-            obs.extend(self.add_feature_names(["prev_ctrl_thrust", "prev_ctrl_roll", "prev_ctrl_pitch", "prev_ctrl_yaw"], normalized_prev_ctrl))
-
-            # Derivative control computed in step()
-            obs.extend(self.add_feature_names(["derivative_ctrl_thrust", "derivative_ctrl_roll", "derivative_ctrl_pitch", "derivative_ctrl_yaw"], self.derivative_control[i]))
-
-            # Update action integral
-            self.integral_control[i] = 0.95 * self.integral_control[i] + 0.05 * normalized_prev_ctrl
-            obs.extend(self.add_feature_names(["integral_ctrl_thrust", "integral_ctrl_roll", "integral_ctrl_pitch", "integral_ctrl_yaw"], self.integral_control[i]))
 
             # Thrust in world frame (body thrust is just [0, 0, thrust], transform to world thrust based on drone rotation)
             world_thrust = rotation_matrix @ np.array([0, 0, self.prev_control[i][0]])
             world_thrust /= (np.linalg.norm(world_thrust) + 1e-9)
             obs.extend(self.add_feature_names(["world_thrust_x", "world_thrust_y", "world_thrust_z"], world_thrust))
 
-            derivative_world_thrust = world_thrust - self.prev_world_thrust[i]
-            obs.extend(self.add_feature_names(["derivative_world_thrust_x", "derivative_world_thrust_y", "derivative_world_thrust_z"], derivative_world_thrust))
-
-            self.integral_world_thrust[i] = 0.95 * self.integral_world_thrust[i] + 0.05 * world_thrust
-            obs.extend(self.add_feature_names(["integral_world_thrust_x", "integral_world_thrust_y", "integral_world_thrust_z"], self.integral_world_thrust[i]))
-            self.prev_world_thrust[i] = world_thrust
-
-            # Alignment in [-1, 1] of thrust towards the target
-            thrust_alignment = np.dot(world_thrust, direction_to_target)
-            derivative_thrust_alignment = thrust_alignment - self.prev_thrust_alignment[i]
-            self.integral_thrust_alignment[i] = 0.95 * self.integral_thrust_alignment[i] + 0.05 * thrust_alignment
-            self.prev_thrust_alignment[i] = thrust_alignment
+            # Action History (last 16 normalized actions), flattened from (16, 4) to (64,)
+            # normalized_action_history = 2 * (self.action_history[i] / 0.35) - 1
+            flattened_action_history = self.action_history[i].flatten()
             obs.extend(self.add_feature_names(
-                ["thrust_alignment", "derivative_thrust_alignment", "integral_thrust_alignment"], 
-                np.array([thrust_alignment, derivative_thrust_alignment, self.integral_thrust_alignment[i]], dtype=np.float32)
+                [f"ctrl_hist_{t}_{name}" for t in range(self.action_history_len) for name in ["thrust", "roll", "pitch", "yaw"]],
+                flattened_action_history
             ))
 
         return np.array(obs, dtype=np.float32)

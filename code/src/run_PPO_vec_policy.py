@@ -6,12 +6,24 @@ import numpy as np
 import mujoco.viewer
 import torch
 from tabulate import tabulate
+import logging
 
 from run_manual_control import load_manual_steps
 from constants import SCENE_PATH, MODEL_SAVE_PATH
 from PPO_vec_agent import PPOAgentVec
 from hover_target_environment import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+
+# Set up logging, can be a lot of logs so save to a log file
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("run_logs_PPO_training.log", mode="w"),
+    ],
+)
+logger = logging.getLogger(__name__)
 
 ####################################
 # Env factory for parallelism
@@ -78,7 +90,8 @@ def train_PPO(
             for i, done in enumerate(dones):
                 if done:
                     if print_logs:
-                        print(f"Update {update + 1}/{num_updates}: env {i + 1:2d} finished an episode with return: {episode_returns[i]:.2f}")
+                        end_type = "terminated" if terminateds[i] else "TRUNCATED"
+                        logger.info(f"Update {update + 1}/{num_updates}: env {i + 1:2d} {end_type} an episode with return: {episode_returns[i]:.2f}")
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
@@ -200,7 +213,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.5, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.00, 1.0], dtype=np.float32),
         max_steps=5000,
         random_initialization=False,
         debug=True
@@ -209,7 +222,6 @@ if __name__ == "__main__":
     render_PPO(agent, render_env, seed=42, sleep_time=1/1000)
 
     # Feature importance for each action
-    print("\nFeature importance ranking (per action):")
     rows = []
     for idx, feature_name in enumerate(render_env.observation_names):
         scores = []
@@ -224,17 +236,12 @@ if __name__ == "__main__":
         rows.append([idx, feature_name] + scores + [score_sum])
 
     headers = ["Idx", "Feature", "Thrust", "Roll", "Pitch", "Yaw", "Sum"]
-
-    # Sorting the importance table
-    # Change to "Thrust", "Roll", "Pitch", or "Yaw" to order importance for a specific action
     sortby = "Sum"
     col_idx = headers.index(sortby)
     rows.sort(key=lambda x: x[col_idx], reverse=True)
 
     # Format value columns (decimal precision)
     rows_formatted = [[r[0], r[1]] + [f"{s:.4f}" for s in r[2:]] for r in rows]
-
-    print(tabulate(rows_formatted, headers=headers, tablefmt="fancy_grid"))
 
     # Save feature importance results to a CSV
     out_dir = os.path.join(os.path.dirname(__file__), "..", "output_feature_importance")
@@ -250,10 +257,8 @@ if __name__ == "__main__":
     print(f"\nFeature importance CSV saved to {out_path}\n")
 
     # Track which rewards/penalties were important during this run
-    print(f"Reward summary:\n")
     summary = render_env.reward_tracker.summary()
-
-    print(f"Total reward: {summary['total']:.6f}")
+    print(f"\nTotal reward: {summary['total']:.6f}")
 
     abs_total = 0
     for name, stats in summary["reward_summary"].items():

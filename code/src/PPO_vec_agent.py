@@ -103,7 +103,8 @@ class PPOAgentVec:
         update_epochs: int = 2,
         num_minibatches: int = 4,
         entropy_coefficient: float = 0.01,
-        kl_threshold: float = 0.35,
+        value_loss_coefficient: float = 0.5,
+        kl_threshold: float = 0.05,
         device: str = "cpu",
         track_obs_gradient: bool = False
     ):
@@ -128,6 +129,8 @@ class PPOAgentVec:
             Number of minibatches for policy updates.
         entropy_coefficient : float
             Coefficient used for entropy bonus in policy loss
+        value_loss_coefficient : float
+            Coefficient for the value function loss used by the critic
         kl_threshold : float
             Threshold for KL-divergence
         device : str
@@ -144,6 +147,7 @@ class PPOAgentVec:
         self.lr = lr
         self.num_minibatches = num_minibatches
         self.entropy_coefficient = entropy_coefficient
+        self.value_loss_coefficient = value_loss_coefficient
         self.kl_threshold = kl_threshold
         self.device = torch.device(device)
 
@@ -450,7 +454,7 @@ class PPOAgentVec:
                 kl_mean = torch.distributions.kl_divergence(dist_old, dist).sum(dim=-1).mean()
 
                 if kl_mean > self.kl_threshold:
-                    print(f"Early stopping due to KL divergence: {kl_mean.item():.4f} > {self.kl_threshold}")
+                    print(f"\nEarly stopping due to KL divergence: {kl_mean.item():.4f} > {self.kl_threshold}\n")
                     break
 
 
@@ -475,7 +479,7 @@ class PPOAgentVec:
 
                 # Value function loss (MSE)
                 pred_values = self.value_network(obs_batch).view(-1)
-                value_loss = nn.MSELoss()(pred_values, returns_batch)
+                value_loss = self.value_loss_coefficient * nn.MSELoss()(pred_values, returns_batch)
 
 
                 ######################################
