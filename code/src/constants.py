@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 SCENE_PATH = os.path.join(
     os.path.dirname(__file__),

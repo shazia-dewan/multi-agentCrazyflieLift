@@ -70,6 +70,11 @@ def train_PPO(
     episode_returns = np.zeros(num_envs)
     completed_episode_returns = []
 
+    # Training curriculum
+    current_curriculum_stage = 10
+    envs.set_attr("curriculum_stage", current_curriculum_stage)
+    updates_before_curriculum_change = num_updates / current_curriculum_stage
+
     for update in range(num_updates):
         for _ in range(update_steps):
             completed_episode_returns.clear()
@@ -116,6 +121,12 @@ def train_PPO(
         for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_now
+
+        # Curriculum shift
+        if update > 1 and update % updates_before_curriculum_change == 0:
+            current_curriculum_stage -= 1
+            print(f"\nChanging curriculum to stage {current_curriculum_stage}\n")
+            envs.set_attr("curriculum_stage", current_curriculum_stage)
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -225,7 +236,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.04, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
         max_steps=5000,
         random_initialization=False,
         debug=True

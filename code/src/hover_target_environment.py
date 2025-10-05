@@ -10,9 +10,11 @@ from reward_system import RewardTracker
 BASE_HOVER_THRUST = 0.26487
 
 TRAINING_POS_RANGE = 2.0
-TRAINING_QUAT_RANGE = np.pi / 36
-TRAINING_RANGE_VEL = 0.01
-TRAINING_RANGE_ANG_VEL = 0.05
+TRAINING_QUAT_RANGE = np.pi / 4
+TRAINING_VEL_RANGE = 1.0
+TRAINING_ANG_VEL_RANGE = 0.5
+
+OUT_OF_BOUNDS_RANGE = 2.0
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -23,6 +25,7 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
         max_steps: int = 1500,
+        curriculum_stage: int = 1,
         random_initialization: bool = True,
         debug: bool = False,
     ):
@@ -39,6 +42,8 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition for episodes (when we have reached max_steps)
+        curriculum_stage : int
+            Scales the training initialization value ranges for pos/rot/vel/ang_vel by value / curriculum_stage
         random_initialization : bool
             Whether to randomly initialize target pos and drone pos/rotation
         debug : bool
@@ -56,10 +61,15 @@ class CrazyflieEnv(gym.Env):
         self.ctrl_per_drone = 4
 
         # Store user config
-        self.num_drones = num_drones
+        assert num_drones > 0, "Cannot have < 1 drone(s)"
         assert target_pos[2] > 0.0, "Target position is under the ground"
+        assert max_steps > 0, "Cannot have < 1 steps"
+        assert curriculum_stage > 0, "Curriculum has a minimum stage of 1"
+
+        self.num_drones = num_drones
         self.target_pos = target_pos
         self.max_steps = max_steps
+        self.curriculum_stage = curriculum_stage
         self.random_initialization = random_initialization
         self.debug = debug
 
@@ -77,6 +87,12 @@ class CrazyflieEnv(gym.Env):
         self.action_space = spaces.Box(act_low, act_high, dtype=np.float32)
 
         self.survival_bonus = 1 / self.max_steps
+
+        # Adjust training ranges based on curriculum
+        self.training_pos_range = TRAINING_POS_RANGE / self.curriculum_stage
+        self.training_quat_range = TRAINING_QUAT_RANGE / self.curriculum_stage
+        self.training_vel_range = TRAINING_VEL_RANGE / self.curriculum_stage
+        self.training_ang_vel_range = TRAINING_ANG_VEL_RANGE / self.curriculum_stage
 
         # Viewer
         self.viewer = None
@@ -157,9 +173,9 @@ class CrazyflieEnv(gym.Env):
                 base_qpos = i * self.qpos_per_drone
                 
                 # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
-                start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
+                start_x = self.np_random.uniform(-self.training_pos_range / 2, self.training_pos_range / 2)
+                start_y = self.np_random.uniform(-self.training_pos_range / 2, self.training_pos_range / 2)
+                start_z = self.np_random.uniform(0.1, self.training_pos_range)
 
                 self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = start_y
@@ -175,7 +191,7 @@ class CrazyflieEnv(gym.Env):
                 axis = np.array([1.0, 0.0, 0.0])
                 axis /= np.linalg.norm(axis)
 
-                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+                angle = self.np_random.uniform(-self.training_quat_range, self.training_quat_range)
 
                 w = np.cos(angle / 2.0)
                 x, y, z = axis * np.sin(angle / 2.0)
@@ -184,13 +200,13 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
 
                 # Random starting linear velocity
-                vel_y = self.np_random.uniform(-TRAINING_RANGE_VEL, TRAINING_RANGE_VEL)
-                vel_z = self.np_random.uniform(-TRAINING_RANGE_VEL, TRAINING_RANGE_VEL)
+                vel_y = self.np_random.uniform(-self.training_vel_range, self.training_vel_range)
+                vel_z = self.np_random.uniform(-self.training_vel_range, self.training_vel_range)
                 vel_x = 0.0
                 self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
 
                 # Random starting angular velocity
-                ang_vel_x = self.np_random.uniform(-TRAINING_RANGE_ANG_VEL, TRAINING_RANGE_ANG_VEL)
+                ang_vel_x = self.np_random.uniform(-self.training_ang_vel_range, self.training_ang_vel_range)
                 ang_vel_y = 0.0
                 ang_vel_z = 0.0
                 self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
@@ -319,14 +335,14 @@ class CrazyflieEnv(gym.Env):
                 # Reward/penalty for rolling against/into angular velocity on drone X
                 angular_velocity_direction = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
                 angular_velocity_direction_body = rotation_matrix.T @ angular_velocity_direction
-                roll_away_from_angular_velocity = 0.0001 * np.sign(roll) * angular_velocity_direction_body[0]
+                roll_away_from_angular_velocity = 0.005 * np.sign(roll) * angular_velocity_direction_body[0]
                 self.reward_tracker.update("roll_away_from_angular_velocity", roll_away_from_angular_velocity)
             else:
                 self.reward_tracker.update("roll_towards_target", 0.0)
                 self.reward_tracker.update("roll_away_from_velocity", 0.0)
                 self.reward_tracker.update("roll_away_from_rotation", 0.0)
                 self.reward_tracker.update("roll_away_from_angular_velocity", 0.0)
-
+            
             # Survival bonus
             self.reward_tracker.update("survival", self.survival_bonus)
             reward = self.reward_tracker.step_total()
@@ -343,7 +359,8 @@ class CrazyflieEnv(gym.Env):
 
             # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
             initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
-            if distance_to_target > initial_distance_to_target + 2.0:
+            out_of_bounds = OUT_OF_BOUNDS_RANGE / self.curriculum_stage
+            if distance_to_target > initial_distance_to_target + out_of_bounds:
                 self.reward_tracker.update("out_of_bounds", -2)
                 reward = self.reward_tracker.step_total()
                 terminated = True
