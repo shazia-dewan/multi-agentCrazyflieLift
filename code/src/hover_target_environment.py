@@ -16,6 +16,9 @@ TRAINING_ANG_VEL_RANGE = 0.5
 
 OUT_OF_BOUNDS_RANGE = 2.0
 
+# Curriculum works down from max stage --> 1, the TRAINING constants above are scaled by value / curriculum_stage
+MAX_CURRICULUM_STAGE = 10
+
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
@@ -296,13 +299,15 @@ class CrazyflieEnv(gym.Env):
             ##############################################
             # Rewards
             ##############################################
+            # Scale some rewards as curriculum progresses and navigation becomes more important than survival
+            curriculum_scaling = MAX_CURRICULUM_STAGE / self.curriculum_stage
 
             # Reward for moving closer to target
             # Compare new & old distance to generate a per step reward (-dist_new alone may not signal improvement)
             distance_to_target_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
             pos_error = self.target_pos - pos
             distance_to_target = np.linalg.norm(pos_error)
-            distance_improvement = distance_to_target_old - distance_to_target
+            distance_improvement = curriculum_scaling * (distance_to_target_old - distance_to_target)
             self.reward_tracker.update("distance_improvement", distance_improvement)
 
             above_the_ground = pos[2] > 0.05
@@ -318,19 +323,19 @@ class CrazyflieEnv(gym.Env):
                 # Scaled by the proximity function because rolling towards target is more important when far away
                 direction_to_target = pos_error / (distance_to_target + 1e-9)
                 direction_to_target_body = rotation_matrix.T @ direction_to_target
-                roll_towards_target = 0.001 * np.sign(roll) * direction_to_target_body[1] * y_target_proximity_function
+                roll_towards_target = curriculum_scaling * 0.001 * np.sign(roll) * direction_to_target_body[1] * y_target_proximity_function
                 self.reward_tracker.update("roll_towards_target", roll_towards_target)
 
                 # Reward/penalty for rolling against/into velocity on drone Y (roll-controlled) axis to counteract velocity
                 velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
                 velocity_direction_body = rotation_matrix.T @ velocity_direction
-                roll_away_from_velocity = 0.0005 * -np.sign(roll) * velocity_direction_body[1]
+                roll_away_from_velocity = 0.0002 * -np.sign(roll) * velocity_direction_body[1]
                 self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
 
-                # Reward/penalty for rolling towards/away from a neutral rotation on drone Y
-                drone_body_up = rotation_matrix.T @ np.array([0, 0, 1])
-                roll_away_from_rotation = 0.005 * np.sign(roll) * drone_body_up[1]
-                self.reward_tracker.update("roll_away_from_rotation", roll_away_from_rotation)
+                # # Reward/penalty for rolling towards/away from a neutral rotation on drone Y
+                # drone_body_up = rotation_matrix.T @ np.array([0, 0, 1])
+                # roll_away_from_rotation = 0.005 * np.sign(roll) * drone_body_up[1]
+                # self.reward_tracker.update("roll_away_from_rotation", roll_away_from_rotation)
 
                 # Reward/penalty for rolling against/into angular velocity on drone X
                 angular_velocity_direction = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
@@ -340,7 +345,7 @@ class CrazyflieEnv(gym.Env):
             else:
                 self.reward_tracker.update("roll_towards_target", 0.0)
                 self.reward_tracker.update("roll_away_from_velocity", 0.0)
-                self.reward_tracker.update("roll_away_from_rotation", 0.0)
+                # self.reward_tracker.update("roll_away_from_rotation", 0.0)
                 self.reward_tracker.update("roll_away_from_angular_velocity", 0.0)
             
             # Survival bonus

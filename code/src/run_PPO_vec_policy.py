@@ -40,6 +40,7 @@ def train_PPO(
     envs,
     total_steps: int,
     update_steps: int,
+    num_curriculum_stages: int = 10,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -50,6 +51,8 @@ def train_PPO(
     -----------
     envs : SubprocVecEnv or DummyVecEnv
         The SB3 vectorized wrapper for our envs
+    curriculum_stages: int
+        The number of curriculum env stages
     """
     # Set up logging, can be a lot of logs so save to a log file
     logging.basicConfig(
@@ -71,7 +74,7 @@ def train_PPO(
     completed_episode_returns = []
 
     # Training curriculum
-    current_curriculum_stage = 10
+    current_curriculum_stage = num_curriculum_stages
     envs.set_attr("curriculum_stage", current_curriculum_stage)
     updates_before_curriculum_change = num_updates / current_curriculum_stage
 
@@ -116,11 +119,11 @@ def train_PPO(
         #         print(f"\nPositive average update reward, scaling down survival bonus\n")
 
 
-        # Anneal lr and entropy param for policy and value optimizers (decreases lr over time based on number of updates)
-        lr_now = agent.lr * (1.0 - update / num_updates)
-        for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr_now
+        # # Anneal lr and entropy param for policy and value optimizers (decreases lr over time based on number of updates)
+        # lr_now = agent.lr * (1.0 - update / num_updates)
+        # for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
+        #     for param_group in optimizer.param_groups:
+        #         param_group["lr"] = lr_now
 
         # Curriculum shift
         if update > 1 and update % updates_before_curriculum_change == 0:
@@ -207,6 +210,8 @@ if __name__ == "__main__":
         device=device
     )
 
+
+
     if not args.load_model:
         # Pre-train drone with steps from manual control 
         if args.manual_steps:
@@ -217,7 +222,7 @@ if __name__ == "__main__":
             agent.update_policy(last_values)
     
         # Train the agent with PPO
-        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, num_curriculum_stages=10)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
@@ -236,8 +241,8 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
-        max_steps=5000,
+        target_pos=np.array([0.0, -0.5, 0.5], dtype=np.float32),
+        max_steps=10000,
         random_initialization=False,
         debug=True
     )

@@ -97,7 +97,7 @@ class PPOAgentVec:
         self,
         obs_dim: int,
         action_dim: int,
-        lr: float = 3e-3,
+        lr: float = 3e-4,
         gamma: float = 0.99,
         clip_eps: float = 0.2,
         update_epochs: int = 2,

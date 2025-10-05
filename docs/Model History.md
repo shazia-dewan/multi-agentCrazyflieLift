@@ -47,3 +47,13 @@
   - Switch to GAE for critic advantage estimation (was using MC estimation before)
 - Result
   - Works for very small Y range +/- 0.02 if on same Z, oversteers for anything greater
+
+
+**Model: yz_hover_8env_900k_step_curriculum**
+- Changes since last model
+  - Added emphasis (reward) for rolling to counter angular velocity on roll axis
+  - Re-added curriculum: gradually scales training ranges (e.g. starting pos) but also navigation rewards
+    - Removed LR annealing so that later curriculum stages are not diminished by low step size
+    - Motive: Learn stable YZ hovering, then emphasize navigation to target once stable later in the training
+- Result: Stable Y rolling, but rolls past target on Y axis
+  - May need to train later curriculum portion (navigation) for longer
