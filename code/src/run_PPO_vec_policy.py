@@ -14,17 +14,6 @@ from PPO_vec_agent import PPOAgentVec
 from hover_target_environment import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
-# Set up logging, can be a lot of logs so save to a log file
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("run_logs_PPO_training.log", mode="w"),
-    ],
-)
-logger = logging.getLogger(__name__)
-
 ####################################
 # Env factory for parallelism
 ####################################
@@ -62,15 +51,29 @@ def train_PPO(
     envs : SubprocVecEnv or DummyVecEnv
         The SB3 vectorized wrapper for our envs
     """
+    # Set up logging, can be a lot of logs so save to a log file
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("run_logs_PPO_training.log", mode="w"),
+        ],
+    )
+    logger = logging.getLogger(__name__)
+
     print("\nBeginning PPO training...")
     num_envs = envs.num_envs
     num_updates = total_steps // update_steps
 
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
+    completed_episode_returns = []
 
     for update in range(num_updates):
         for _ in range(update_steps):
+            completed_episode_returns.clear()
+
             actions, log_probs, values = agent.sample_action(obs)
             next_obs, rewards, dones, infos = envs.step(actions)
 
@@ -92,6 +95,7 @@ def train_PPO(
                     if print_logs:
                         end_type = "terminated" if terminateds[i] else "TRUNCATED"
                         logger.info(f"Update {update + 1}/{num_updates}: env {i + 1:2d} {end_type} an episode with return: {episode_returns[i]:.2f}")
+                    completed_episode_returns.append(episode_returns[i])
                     episode_returns[i] = 0.0
 
         # At the end of rollout, bootstrap last state values for any non-terminal episodes
@@ -99,7 +103,15 @@ def train_PPO(
         _, _, last_values = agent.sample_action(obs, deterministic=True)
         agent.update_policy(last_values)
 
-        # Anneal lr param for policy and value optimizers (decreases lr over time based on number of updates)
+        # # Compute average return over this update, if avg > n, scale down survival bonus (focus on other rewards)
+        # if len(completed_episode_returns) > 1:
+        #     avg_episode_return = np.mean(completed_episode_returns)
+        #     if avg_episode_return > 0:
+        #         envs.set_attr("survival_bonus", envs.get_attr("survival_bonus")[0] / 2)
+        #         print(f"\nPositive average update reward, scaling down survival bonus\n")
+
+
+        # Anneal lr and entropy param for policy and value optimizers (decreases lr over time based on number of updates)
         lr_now = agent.lr * (1.0 - update / num_updates)
         for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
             for param_group in optimizer.param_groups:
@@ -114,7 +126,7 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int = 42, sleep_time: float = 1/120):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int | None = 42, sleep_time: float = 1/120):
     """
     Render trained PPO in a single environment
     """
@@ -155,7 +167,7 @@ if __name__ == "__main__":
         help="Before PPO training, bootstrap the model offline from manual control steps."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_steps", type=int, default=150_000, help="Total timesteps for training")
+    parser.add_argument("--total_steps", type=int, default=225_000, help="Total timesteps for training")
     parser.add_argument("--update_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
@@ -213,7 +225,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.00, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.04, 1.0], dtype=np.float32),
         max_steps=5000,
         random_initialization=False,
         debug=True

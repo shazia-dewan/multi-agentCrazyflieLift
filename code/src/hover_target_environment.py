@@ -8,10 +8,11 @@ from scipy.spatial.transform import Rotation as R
 from reward_system import RewardTracker
 
 BASE_HOVER_THRUST = 0.26487
+
 TRAINING_POS_RANGE = 2.0
 TRAINING_QUAT_RANGE = np.pi / 36
-
-STEPS_BEFORE_IDLE = 400
+TRAINING_RANGE_VEL = 0.01
+TRAINING_RANGE_ANG_VEL = 0.05
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -74,6 +75,8 @@ class CrazyflieEnv(gym.Env):
         act_high = np.tile([0.35, 1, 1, 1], self.num_drones).astype(np.float32)
         act_low = np.tile([0.0, -1, -1, -1], self.num_drones).astype(np.float32)
         self.action_space = spaces.Box(act_low, act_high, dtype=np.float32)
+
+        self.survival_bonus = 1 / self.max_steps
 
         # Viewer
         self.viewer = None
@@ -179,6 +182,19 @@ class CrazyflieEnv(gym.Env):
 
                 quat = np.array([w, x, y, z], dtype=np.float64)
                 self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
+
+                # Random starting linear velocity
+                vel_y = self.np_random.uniform(-TRAINING_RANGE_VEL, TRAINING_RANGE_VEL)
+                vel_z = self.np_random.uniform(-TRAINING_RANGE_VEL, TRAINING_RANGE_VEL)
+                vel_x = 0.0
+                self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
+
+                # Random starting angular velocity
+                ang_vel_x = self.np_random.uniform(-TRAINING_RANGE_ANG_VEL, TRAINING_RANGE_ANG_VEL)
+                ang_vel_y = 0.0
+                ang_vel_z = 0.0
+                self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
+
         else:
             # Start drone(s) at consistent Z with X offset per drone
             for i in range(self.num_drones):
@@ -273,13 +289,14 @@ class CrazyflieEnv(gym.Env):
             distance_improvement = distance_to_target_old - distance_to_target
             self.reward_tracker.update("distance_improvement", distance_improvement)
 
-            # Get drone rotation matrix for drone-relative coordinates
-            quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
-            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
-
             above_the_ground = pos[2] > 0.05
             if above_the_ground:
+                # absolute tanh function that scales to 0 as we approach the target on the Y axis
                 y_target_proximity_function = abs(np.tanh(pos_error[1]))
+
+                # Get drone rotation matrix for drone-relative coordinates
+                quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
+                rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
 
                 # Reward/penalty for rolling towards/away from target on drone Y (roll-controlled) axis
                 # Scaled by the proximity function because rolling towards target is more important when far away
@@ -288,17 +305,30 @@ class CrazyflieEnv(gym.Env):
                 roll_towards_target = 0.001 * np.sign(roll) * direction_to_target_body[1] * y_target_proximity_function
                 self.reward_tracker.update("roll_towards_target", roll_towards_target)
 
-                # Reward/penalty for rolling away from/into velocity on drone Y (roll-controlled) axis to counteract velocity
+                # Reward/penalty for rolling against/into velocity on drone Y (roll-controlled) axis to counteract velocity
                 velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
                 velocity_direction_body = rotation_matrix.T @ velocity_direction
                 roll_away_from_velocity = 0.0005 * -np.sign(roll) * velocity_direction_body[1]
                 self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
+
+                # Reward/penalty for rolling towards/away from a neutral rotation on drone Y
+                drone_body_up = rotation_matrix.T @ np.array([0, 0, 1])
+                roll_away_from_rotation = 0.005 * np.sign(roll) * drone_body_up[1]
+                self.reward_tracker.update("roll_away_from_rotation", roll_away_from_rotation)
+
+                # Reward/penalty for rolling against/into angular velocity on drone X
+                angular_velocity_direction = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
+                angular_velocity_direction_body = rotation_matrix.T @ angular_velocity_direction
+                roll_away_from_angular_velocity = 0.0001 * np.sign(roll) * angular_velocity_direction_body[0]
+                self.reward_tracker.update("roll_away_from_angular_velocity", roll_away_from_angular_velocity)
             else:
                 self.reward_tracker.update("roll_towards_target", 0.0)
                 self.reward_tracker.update("roll_away_from_velocity", 0.0)
+                self.reward_tracker.update("roll_away_from_rotation", 0.0)
+                self.reward_tracker.update("roll_away_from_angular_velocity", 0.0)
 
             # Survival bonus
-            self.reward_tracker.update("survival", 0.0001)
+            self.reward_tracker.update("survival", self.survival_bonus)
             reward = self.reward_tracker.step_total()
 
             ##############################################
@@ -307,14 +337,14 @@ class CrazyflieEnv(gym.Env):
 
             # Crash, terminate with penalty
             if not above_the_ground:
-                self.reward_tracker.update("crash", -1)
+                self.reward_tracker.update("crash", -2)
                 reward = self.reward_tracker.step_total()
                 terminated = True
 
-            # Out of bounds, terminate with penalty (if we go further from the target compared to starting pos)
+            # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
             initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
-            if distance_to_target > initial_distance_to_target + 0.1:
-                self.reward_tracker.update("out_of_bounds", -1)
+            if distance_to_target > initial_distance_to_target + 2.0:
+                self.reward_tracker.update("out_of_bounds", -2)
                 reward = self.reward_tracker.step_total()
                 terminated = True
 

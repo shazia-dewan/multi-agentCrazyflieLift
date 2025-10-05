@@ -203,9 +203,6 @@ if __name__ == "__main__":
             time.sleep(step_time)
 
             if done:
-                print(f"Episode ended. Total reward: {total_reward:.2f}")
-                total_reward = 0.0
-                obs, _ = env.reset()
                 break
 
     listener.stop()
