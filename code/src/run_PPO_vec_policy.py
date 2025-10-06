@@ -76,7 +76,7 @@ def train_PPO(
     # Training curriculum
     current_curriculum_stage = num_curriculum_stages
     envs.set_attr("curriculum_stage", current_curriculum_stage)
-    updates_before_curriculum_change = num_updates / current_curriculum_stage
+    updates_before_curriculum_change = np.floor(num_updates / current_curriculum_stage)
 
     for update in range(num_updates):
         for _ in range(update_steps):
@@ -126,9 +126,9 @@ def train_PPO(
         #         param_group["lr"] = lr_now
 
         # Curriculum shift
-        if update > 1 and update % updates_before_curriculum_change == 0:
+        if current_curriculum_stage > 1 and update % updates_before_curriculum_change == 0:
             current_curriculum_stage -= 1
-            print(f"\nChanging curriculum to stage {current_curriculum_stage}\n")
+            logger.info(f"Changing curriculum to stage {current_curriculum_stage}\n")
             envs.set_attr("curriculum_stage", current_curriculum_stage)
 
     if save_model:
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, -0.5, 0.5], dtype=np.float32),
+        target_pos=np.array([0.0, -0.1, 2.0], dtype=np.float32),
         max_steps=10000,
         random_initialization=False,
         debug=True

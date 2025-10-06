@@ -55,5 +55,5 @@
   - Re-added curriculum: gradually scales training ranges (e.g. starting pos) but also navigation rewards
     - Removed LR annealing so that later curriculum stages are not diminished by low step size
     - Motive: Learn stable YZ hovering, then emphasize navigation to target once stable later in the training
-- Result: Stable Y rolling, but rolls past target on Y axis
+- Result: Stable Y rolling, but rolls past target on Y axis (also occasionally rolls the wrong way)
   - May need to train later curriculum portion (navigation) for longer

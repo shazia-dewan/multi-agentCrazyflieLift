@@ -10,11 +10,11 @@ from reward_system import RewardTracker
 BASE_HOVER_THRUST = 0.26487
 
 TRAINING_POS_RANGE = 2.0
-TRAINING_QUAT_RANGE = np.pi / 4
-TRAINING_VEL_RANGE = 1.0
-TRAINING_ANG_VEL_RANGE = 0.5
+TRAINING_QUAT_RANGE = np.pi / 6
+TRAINING_VEL_RANGE = 0.5
+TRAINING_ANG_VEL_RANGE = 0.25
 
-OUT_OF_BOUNDS_RANGE = 2.0
+OUT_OF_BOUNDS_RANGE = 4.0
 
 # Curriculum works down from max stage --> 1, the TRAINING constants above are scaled by value / curriculum_stage
 MAX_CURRICULUM_STAGE = 10
@@ -320,22 +320,23 @@ class CrazyflieEnv(gym.Env):
                 rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
 
                 # Reward/penalty for rolling towards/away from target on drone Y (roll-controlled) axis
-                # Scaled by the proximity function because rolling towards target is more important when far away
+                # Scaled by the proximity function because rolling towards target is more important when far away from target
                 direction_to_target = pos_error / (distance_to_target + 1e-9)
                 direction_to_target_body = rotation_matrix.T @ direction_to_target
-                roll_towards_target = curriculum_scaling * 0.001 * np.sign(roll) * direction_to_target_body[1] * y_target_proximity_function
+                roll_towards_target_y = curriculum_scaling * 0.001 * np.sign(roll) * direction_to_target_body[1] * (y_target_proximity_function + 0.1)
+                # self.reward_tracker.update("roll_towards_target", roll_towards_target_y)
+
+                # TESTING ANOTHER ROLL TOWARD TARGET VERSION
+                # Penalize rolling away from target more (reward and penalty can even out otherwise when going in wrong direction)
+                right_direction_scaling = 0.0002 if roll_towards_target_y >= 0 else 0.0004
+                roll_towards_target = curriculum_scaling * right_direction_scaling * roll_towards_target_y
                 self.reward_tracker.update("roll_towards_target", roll_towards_target)
 
                 # Reward/penalty for rolling against/into velocity on drone Y (roll-controlled) axis to counteract velocity
                 velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
                 velocity_direction_body = rotation_matrix.T @ velocity_direction
-                roll_away_from_velocity = 0.0002 * -np.sign(roll) * velocity_direction_body[1]
+                roll_away_from_velocity = 0.001 * -np.sign(roll) * velocity_direction_body[1]
                 self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
-
-                # # Reward/penalty for rolling towards/away from a neutral rotation on drone Y
-                # drone_body_up = rotation_matrix.T @ np.array([0, 0, 1])
-                # roll_away_from_rotation = 0.005 * np.sign(roll) * drone_body_up[1]
-                # self.reward_tracker.update("roll_away_from_rotation", roll_away_from_rotation)
 
                 # Reward/penalty for rolling against/into angular velocity on drone X
                 angular_velocity_direction = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
