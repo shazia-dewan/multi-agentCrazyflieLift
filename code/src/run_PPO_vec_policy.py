@@ -40,7 +40,6 @@ def train_PPO(
     envs,
     total_steps: int,
     update_steps: int,
-    num_curriculum_stages: int = 10,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -73,10 +72,8 @@ def train_PPO(
     episode_returns = np.zeros(num_envs)
     completed_episode_returns = []
 
-    # Training curriculum
-    current_curriculum_stage = num_curriculum_stages
-    envs.set_attr("curriculum_stage", current_curriculum_stage)
-    updates_before_curriculum_change = np.floor(num_updates / current_curriculum_stage)
+    # Training curriculum - scale linearly from [0, 1] based on current update
+    envs.set_attr("curriculum_factor", 0)
 
     for update in range(num_updates):
         for _ in range(update_steps):
@@ -111,25 +108,9 @@ def train_PPO(
         _, _, last_values = agent.sample_action(obs, deterministic=True)
         agent.update_policy(last_values)
 
-        # # Compute average return over this update, if avg > n, scale down survival bonus (focus on other rewards)
-        # if len(completed_episode_returns) > 1:
-        #     avg_episode_return = np.mean(completed_episode_returns)
-        #     if avg_episode_return > 0:
-        #         envs.set_attr("survival_bonus", envs.get_attr("survival_bonus")[0] / 2)
-        #         print(f"\nPositive average update reward, scaling down survival bonus\n")
-
-
-        # # Anneal lr and entropy param for policy and value optimizers (decreases lr over time based on number of updates)
-        # lr_now = agent.lr * (1.0 - update / num_updates)
-        # for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
-        #     for param_group in optimizer.param_groups:
-        #         param_group["lr"] = lr_now
-
-        # Curriculum shift
-        if current_curriculum_stage > 1 and update % updates_before_curriculum_change == 0:
-            current_curriculum_stage -= 1
-            logger.info(f"Changing curriculum to stage {current_curriculum_stage}\n")
-            envs.set_attr("curriculum_stage", current_curriculum_stage)
+        # Curriculum shift towards 1
+        logger.info(f"Changing curriculum factor to {update / num_updates}\n")
+        envs.set_attr("curriculum_factor", update / num_updates)
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -181,7 +162,7 @@ if __name__ == "__main__":
         help="Before PPO training, bootstrap the model offline from manual control steps."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_steps", type=int, default=225_000, help="Total timesteps for training")
+    parser.add_argument("--total_steps", type=int, default=300_000, help="Total timesteps for training")
     parser.add_argument("--update_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
@@ -210,8 +191,6 @@ if __name__ == "__main__":
         device=device
     )
 
-
-
     if not args.load_model:
         # Pre-train drone with steps from manual control 
         if args.manual_steps:
@@ -222,7 +201,7 @@ if __name__ == "__main__":
             agent.update_policy(last_values)
     
         # Train the agent with PPO
-        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, num_curriculum_stages=10)
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
@@ -241,8 +220,9 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, -0.1, 2.0], dtype=np.float32),
+        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
         max_steps=10000,
+        curriculum_factor=1,
         random_initialization=False,
         debug=True
     )

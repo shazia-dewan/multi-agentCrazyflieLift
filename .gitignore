@@ -2,3 +2,4 @@ __pycache__/
 .DS_Store
 .venv
 .vscode
+/code/model_manual_step_data/

@@ -214,12 +214,12 @@ if __name__ == "__main__":
     parser.add_argument("--update_steps", type=int, default=1500, help="Default rollout steps per update")
     args = parser.parse_args()
 
-    # General hyperparameter tests
+    # Hyperparameter variations
     # check_hyperparameter(args, "lr", [3e-3, 1e-3, 7e-4, 5e-4])
     # check_hyperparameter(args, "gamma", [0.98, 0.99, 0.995])
     # check_hyperparameter(args, "clip_eps", [0.15, 0.2, 0.25])
-    check_hyperparameter(args, "update_epochs", [1, 2, 4, 8])
-    check_hyperparameter(args, "num_minibatches", [1, 2, 4, 8])
+    # check_hyperparameter(args, "update_epochs", [1, 2, 4, 8])
+    # check_hyperparameter(args, "num_minibatches", [1, 2, 4, 8])
     # check_hyperparameter(args, "entropy_coefficient", [0.01, 0.02, 0.03, 0.04])
     # check_hyperparameter(args, "kl_threshold", [0.01, 0.02, 0.3, 0.04])
 
