@@ -5,14 +5,15 @@ import mujoco
 from typing import Any, Optional
 from scipy.spatial.transform import Rotation as R
 
+from PID_controller import NeutralHoverController
 from reward_system import RewardTracker
 
 BASE_HOVER_THRUST = 0.26487
 
 TRAINING_POS_RANGE = 1.0
-TRAINING_QUAT_RANGE = np.pi / 6
+TRAINING_QUAT_RANGE = np.pi / 18
 TRAINING_VEL_RANGE = 0.5
-TRAINING_ANG_VEL_RANGE = 0.25
+TRAINING_ANG_VEL_RANGE = 0.2
 
 OUT_OF_BOUNDS_RANGE = 2.0
 
@@ -126,6 +127,8 @@ class CrazyflieEnv(gym.Env):
 
         mujoco.mj_resetData(self.mujoco_scene, self.data)
 
+        self.state = np.zeros((self.num_drones, self.qpos_per_drone + self.qvel_per_drone), dtype=np.float32)
+
         self.starting_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
 
         # Position tracking for previous drone(s) feature
@@ -163,11 +166,12 @@ class CrazyflieEnv(gym.Env):
         if self.random_initialization:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
+                base_qvel = i * self.qvel_per_drone
                 
                 # Random position
                 start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
                 start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
-                start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
+                start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE + 0.1)
 
                 self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = start_y
@@ -183,7 +187,9 @@ class CrazyflieEnv(gym.Env):
                 axis = np.array([1.0, 0.0, 0.0])
                 axis /= np.linalg.norm(axis)
 
-                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+                # angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+                angle = TRAINING_QUAT_RANGE
+
 
                 w = np.cos(angle / 2.0)
                 x, y, z = axis * np.sin(angle / 2.0)
@@ -195,14 +201,13 @@ class CrazyflieEnv(gym.Env):
                 vel_y = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
                 vel_z = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
                 vel_x = 0.0
-                self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
+                self.data.qvel[base_qvel : base_qvel + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
 
                 # Random starting angular velocity
                 ang_vel_x = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
                 ang_vel_y = 0.0
                 ang_vel_z = 0.0
-                self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
-
+                self.data.qvel[base_qvel + 3: base_qvel + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
         else:
             # Start drone(s) at consistent Z with X offset per drone
             for i in range(self.num_drones):
@@ -212,6 +217,21 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 2] = 1.0
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
+
+        # Initial state
+        for i in range(self.num_drones):
+            base_qpos = i * self.qpos_per_drone
+            base_qvel = i * self.qvel_per_drone
+
+            self.state[i] = np.concatenate([
+                self.data.qpos[base_qpos : base_qpos + 3],
+                self.data.qpos[base_qpos + 3 : base_qpos + 7],
+                self.data.qvel[base_qvel : base_qvel + 3],
+                self.data.qvel[base_qvel + 3 : base_qvel + 6]
+            ])
+
+        self.controller = NeutralHoverController(target_yaw=0.0)
+
         
         self.timestep = 0
 
@@ -264,6 +284,8 @@ class CrazyflieEnv(gym.Env):
             quat = self.data.qpos[base_qpos + 3: base_qpos + 7]
             vel = self.data.qvel[base_qvel: base_qvel + 3]
             ang_vel = self.data.qvel[base_qvel + 3: base_qvel + 6]
+
+            self.state[i] = np.concatenate([pos, quat, vel, ang_vel])
 
             #############################################
             # RL Controls
@@ -580,20 +602,3 @@ class CrazyflieEnv(gym.Env):
 
         return np.array(obs, dtype=np.float32)
 
-
-    def render(self) -> None:
-        """
-        Render the scene in MuJoCo
-        """
-        if self.viewer is None:
-            self.viewer = mujoco.viewer.launch_passive(self.mujoco_scene, self.data)
-        self.viewer.sync()
-
-
-    def close(self) -> None:
-        """
-        Close the MuJoCo viewer
-        """
-        if self.viewer is not None:
-            self.viewer.close()
-            self.viewer = None

@@ -220,14 +220,14 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.1, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, -0.1, 1.0], dtype=np.float32),
         max_steps=10000,
         curriculum_factor=1,
-        random_initialization=False,
+        random_initialization=True,
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env, seed=42, sleep_time=1/1000)
+    render_PPO(agent, render_env, seed=None, sleep_time=1/1000)
 
     # Feature importance for each action
     rows = []
