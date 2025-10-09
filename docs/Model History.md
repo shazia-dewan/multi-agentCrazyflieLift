@@ -57,3 +57,11 @@
     - Motive: Learn stable YZ hovering, then emphasize navigation to target once stable later in the training
 - Result: Stable Y rolling, but rolls past target on Y axis (also occasionally rolls the wrong way)
   - May need to train later curriculum portion (navigation) for longer
+
+**Model: yz_hover_10_mujoco_steps**
+- After struggling with roll (rotation in general) for a while, I realized the problem was that having 1 env step = 1 MuJoCo physics step leads to "invisible" cause and effect for rotating actions since roll/pitch/yaw take a longer time to propagate than thrust. Because of this, we now have 10 MuJoCo physics steps per 1 env step (agent takes action based on observation, take 10 physics steps in MuJoCo, report new observation back to agent)
+  - Rewards are now purely based on state rather than action (e.g. no more rewarding rolling to counteract velocity)
+    - Rewards for survival, moving towards target, and proximity to target
+  - Results
+    - Successful YZ hover, some oscillation / instability but the agent always orients towards and stays near the target
+      - Will likely test some other reward metrics for stability such as rewarding low velocity, rotation, etc... before extending to full 3D
