@@ -151,7 +151,6 @@ if __name__ == "__main__":
     listener.start()
 
     total_reward = 0.0
-    step_time = 1 / 140
 
     with mujoco.viewer.launch_passive(env.mujoco_scene, env.data) as viewer:
         # Use the fixed camera for control so it's easier to navigate
@@ -164,6 +163,10 @@ if __name__ == "__main__":
         time.sleep(1)
         print("Letting MuJoCo start up... 1")
         time.sleep(1)
+
+        # Adjust real-time render based on env frame skip and timestep
+        sim_dt = env.mujoco_scene.opt.timestep * getattr(env, "frame_skip", 1)
+        last_time = time.perf_counter()
 
         for step in range(env.max_steps):
             # Reset action deltas each step
@@ -199,7 +202,13 @@ if __name__ == "__main__":
 
             # Render
             viewer.sync()
-            time.sleep(step_time)
+            
+            # Sleep the sim for real-time rendering
+            elapsed = time.perf_counter() - last_time
+            sleep_time = sim_dt - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            last_time = time.perf_counter()
 
             if done:
                 break

@@ -6,7 +6,7 @@ import torch
 
 from constants import SCENE_PATH
 from PPO_vec_agent import PPOAgentVec
-from code.src.hover_target_env_velocity import CrazyflieEnv
+from hover_target_env_RL import CrazyflieEnv
 from run_PPO_vec_policy import train_PPO, make_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
@@ -14,7 +14,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 RESULTS_DIR = os.path.join(
     os.path.dirname(__file__),
     "..",
-    "test_results"
+    "rl_test_results"
 )
 
 def save_results(results: list[dict[str, Any]], filename: str) -> None:

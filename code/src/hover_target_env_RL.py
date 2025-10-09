@@ -8,6 +8,7 @@ from scipy.spatial.transform import Rotation as R
 from PID_controller import NeutralHoverController
 from reward_system import RewardTracker
 
+BASE_HOVER_THRUST = 0.26487
 
 TRAINING_POS_RANGE = 1.0
 TRAINING_QUAT_RANGE = np.pi / 18
@@ -16,7 +17,7 @@ TRAINING_ANG_VEL_RANGE = 0.1
 
 OUT_OF_BOUNDS_RANGE = 2.0
 
-TERMINATION_PENALTY = -0.1
+TERMINATION_PENALTY = -1.0
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -201,13 +202,16 @@ class CrazyflieEnv(gym.Env):
                 ang_vel_y = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
                 ang_vel_z = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
                 self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
+
+                # Start at neutral control
+                self.prev_control[i] = np.array([BASE_HOVER_THRUST, 0.0, 0.0, 0.0], dtype=np.float32)
         else:
-            # In non-training (eval) run, start drone(s) at consistent Z with X offset per drone
+            # In non-training (eval) run, start drone(s) on the floor
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 self.data.qpos[base_qpos + 0] = drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = 0
-                self.data.qpos[base_qpos + 2] = 1.0
+                self.data.qpos[base_qpos + 2] = 0.03
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
 
@@ -278,59 +282,58 @@ class CrazyflieEnv(gym.Env):
 
             self.state[i] = np.concatenate([pos, quat, vel, ang_vel])
 
-            ###########################################################
-            # Stability PID control + RL Control for navigation
-            ###########################################################
-
-            base_ctrl = i * self.ctrl_per_drone
-
-            # Get euler for stability controller, scipy uses [x, y, z, w]
-            quat_xyzw = np.roll(quat, -1)
-            euler = R.from_quat(quat_xyzw).as_euler('xyz')
-            pid_ctrl = self.controller.update(pos, vel, euler, ang_vel)
-
-            # Clip RL residual control within a small degree (just navigation adjustments)
-            thrust_rl = np.clip(action[base_ctrl + 0], 0.0, 0.35)
-            roll_rl   = np.clip(action[base_ctrl + 1], -1, 1)
-            pitch_rl  = np.clip(action[base_ctrl + 2], -1, 1)
-            yaw_rl    = np.clip(action[base_ctrl + 3], -1, 1)
-
-            ctrl_action = np.array([
-                thrust_rl,
-                roll_rl,
-                0.0,
-                0.0
-            ])
-
             # Clip action within action space
-            ctrl_action = np.clip(ctrl_action, self.action_space.low, self.action_space.high)
+            ctrl_action = np.clip(action[base_ctrl : base_ctrl + 4], self.action_space.low, self.action_space.high)
 
-            ctrl[base_ctrl + 0] = ctrl_action[0]
-            ctrl[base_ctrl + 1] = ctrl_action[1]
-            ctrl[base_ctrl + 2] = ctrl_action[2]
-            ctrl[base_ctrl + 3] = ctrl_action[3]
+            # Only testing thrust and roll for now
+            # ctrl[base_ctrl : base_ctrl + 4] = ctrl_action
+            ctrl[base_ctrl : base_ctrl + 4] = np.array([ctrl_action[0], ctrl_action[1], 0.0, 0.0], dtype=np.float32)
 
             # Update action history: shift left and append current roll and pitch
             self.action_history[i, :-1] = self.action_history[i, 1:]
-            self.action_history[i, -1] = np.array([thrust_rl, roll_rl, pitch_rl, yaw_rl])
+            self.action_history[i, -1] = ctrl_action
 
             ##############################################
             # Rewards, Termination, and Truncation
             ##############################################
 
+            # Surival bonus
+            self.reward_tracker.update("survival_bonus", 1 / self.max_steps)
+
             pos_error = self.target_pos - pos
             distance_to_target = np.linalg.norm(pos_error)
 
-            # Reward for moving closer to target
-            # Doubles as thrust reward since thrust is very responsive, roll/pitch/yaw are not
+            # Reward/penalty for moving towards/away from target
             distance_to_target_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
             distance_improvement = distance_to_target_old - distance_to_target
             self.reward_tracker.update("distance_improvement", distance_improvement)
 
+            # Proximity to target bonus
+            proximity_bonus = 0.01 * (1 - np.tanh(distance_to_target))
+            self.reward_tracker.update("proximity_bonus", proximity_bonus)
+
+            # # Penalize large rotations
+            # quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
+            # neutral_rotation = R.from_quat(np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32))
+            # relative_rotation = neutral_rotation.inv() * R.from_quat(quat_xyzw)
+            # rotation_error = -1 * relative_rotation.magnitude() ** 2
+            # self.reward_tracker.update("rotation_penalty", rotation_error)
+
+            # # Penalize high velocities for stable flight
+            # vel_penalty = -0.001 * np.dot(vel, vel)
+            # self.reward_tracker.update("velocity_penalty", vel_penalty)
+
+            # ang_vel_penalty = -0.005 * np.dot(ang_vel, ang_vel)
+            # self.reward_tracker.update("angular_velocity_penalty", ang_vel_penalty)
+
+            # # Penalize deviations from previous action for smooth control
+            # action_deviation_penalty = -0.001 * np.linalg.norm(ctrl_action - self.prev_control[i])
+            # self.reward_tracker.update("action_deviation_penalty", action_deviation_penalty)
+
             reward = self.reward_tracker.step_total()
 
-            # Crash, terminate with penalty
-            if pos[2] < 0.05:
+            # Crash, terminate with penalty (only during training, during eval we can start on the floor)
+            if pos[2] < 0.05 and self.random_initialization:
                 self.reward_tracker.update("crash", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
                 terminated = True
@@ -345,8 +348,9 @@ class CrazyflieEnv(gym.Env):
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps
 
-            # Update prev pos
+            # Update prev pos and prev action
             self.prev_pos[i] = pos.copy()
+            self.prev_control[i] = ctrl_action.copy()
 
             if self.debug:
                 print(f"Step {self.timestep} - Ctrl: {[f'{c:.4f}' for c in ctrl]}, Position: {[f'{p:.2f}' for p in pos]}, Reward: {reward:.4f}")
@@ -549,7 +553,6 @@ class CrazyflieEnv(gym.Env):
                 ["rot_err_x", "rot_err_y", "rot_err_z"], 
                 rotation_error_vector
             ))
-
 
 
 
