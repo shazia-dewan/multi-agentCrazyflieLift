@@ -65,3 +65,4 @@
   - Results
     - Successful YZ hover, some oscillation / instability but the agent always orients towards and stays near the target
       - Will likely test some other reward metrics for stability such as rewarding low velocity, rotation, etc... before extending to full 3D
+  - Agent was trained with 8 parallel envs and 600k timesteps

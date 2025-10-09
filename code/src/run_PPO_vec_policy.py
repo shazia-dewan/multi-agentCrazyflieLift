@@ -230,7 +230,7 @@ if __name__ == "__main__":
             model_path = os.path.join(
                 os.path.dirname(__file__),
                 "..",
-                "models", 
+                "rl_models", 
                 f"{args.load_model}.pt"
             )
         print(f"Loading model from: {model_path}")
@@ -240,7 +240,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, -0.2, 1.2], dtype=np.float32),
+        target_pos=np.array([0.0, 0.2, 1.2], dtype=np.float32),
         max_steps=1500,
         random_initialization=False,
         debug=True
