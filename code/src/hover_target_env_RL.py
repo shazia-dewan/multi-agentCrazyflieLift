@@ -10,10 +10,10 @@ from reward_system import RewardTracker
 
 BASE_HOVER_THRUST = 0.26487
 
-TRAINING_POS_RANGE = 1.0
-TRAINING_QUAT_RANGE = np.pi / 18
-TRAINING_VEL_RANGE = 0.2
-TRAINING_ANG_VEL_RANGE = 0.1
+TRAINING_POS_RANGE = 0.05
+TRAINING_QUAT_RANGE = np.pi / 36
+TRAINING_VEL_RANGE = 0.05
+TRAINING_ANG_VEL_RANGE = 0.025
 
 OUT_OF_BOUNDS_RANGE = 2.0
 
@@ -87,8 +87,13 @@ class CrazyflieEnv(gym.Env):
         # Number of physics steps per call to step()
         self.frame_skip = 10
 
+        self.current_curriculum_step = 1
+
         # Viewer
         self.viewer = None
+
+    def update_curriculum(self, next_curriculum_step: int):
+        self.current_curriculum_step = next_curriculum_step
 
     def add_feature_names(self, name_list: list[str], values: np.ndarray) -> np.ndarray:
         """
@@ -162,15 +167,20 @@ class CrazyflieEnv(gym.Env):
         drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
 
         # Start drone at some random pos [X, Y, Z] around the target with random velocity
+        current_pos_range = TRAINING_POS_RANGE * self.current_curriculum_step
+        current_quat_range = TRAINING_QUAT_RANGE * self.current_curriculum_step
+        current_vel_range = TRAINING_VEL_RANGE * self.current_curriculum_step
+        current_ang_vel_range = TRAINING_ANG_VEL_RANGE * self.current_curriculum_step
+
         if self.random_initialization:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
                 base_qvel = i * self.qvel_per_drone
                 
                 # Random starting position around the target
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE) + self.target_pos[0]
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE) + self.target_pos[1]
-                start_z = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE) + self.target_pos[2]
+                start_x = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[0]
+                start_y = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[1]
+                start_z = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[2]
 
                 self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = start_y
@@ -181,9 +191,10 @@ class CrazyflieEnv(gym.Env):
 
                 # Random rotation axis with small rotation angle
                 axis = self.np_random.normal(size=3)
+                axis = np.array([1.0, 0.0, 0.0])
                 axis /= np.linalg.norm(axis)
 
-                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
+                angle = self.np_random.uniform(-current_quat_range, current_quat_range)
 
                 w = np.cos(angle / 2.0)
                 x, y, z = axis * np.sin(angle / 2.0)
@@ -192,15 +203,15 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
 
                 # Random starting linear velocity
-                vel_y = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                vel_z = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                vel_x = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
+                vel_y = self.np_random.uniform(-current_vel_range, current_vel_range)
+                vel_z = self.np_random.uniform(-current_vel_range, current_vel_range)
+                vel_x = 0.0
                 self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
 
                 # Random starting angular velocity
-                ang_vel_x = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
-                ang_vel_y = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
-                ang_vel_z = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
+                ang_vel_x = self.np_random.uniform(-current_ang_vel_range, current_ang_vel_range)
+                ang_vel_y = 0.0
+                ang_vel_z = 0.0
                 self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
 
                 # Start at neutral control
@@ -333,7 +344,7 @@ class CrazyflieEnv(gym.Env):
             reward = self.reward_tracker.step_total()
 
             # Crash, terminate with penalty (only during training, during eval we can start on the floor)
-            if pos[2] < 0.05 and self.random_initialization:
+            if pos[2] < 0.05 and vel[2] < -0.1:
                 self.reward_tracker.update("crash", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
                 terminated = True

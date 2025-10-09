@@ -41,6 +41,7 @@ def train_PPO(
     envs,
     total_steps: int,
     update_steps: int,
+    curriculum_steps: int = 1,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -70,6 +71,9 @@ def train_PPO(
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
     completed_episode_returns = []
+
+    curriculum_step = 1
+    updates_before_curriculum = num_updates // curriculum_steps
 
     for update in range(num_updates):
         for _ in range(update_steps):
@@ -109,6 +113,12 @@ def train_PPO(
         for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_now
+
+        # Update the curriculum if we have reached the required number of updates
+        if curriculum_steps > 1 and (update + 1) % updates_before_curriculum == 0 and (curriculum_step < curriculum_steps):
+            curriculum_step += 1
+            envs.env_method("update_curriculum", curriculum_step)
+            print(f"\nCurriculum step {curriculum_step}/{curriculum_steps} reached, updated training environment\n")
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -211,7 +221,7 @@ if __name__ == "__main__":
             agent.update_policy(last_values)
     
         # Train the agent with PPO
-        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, curriculum_steps=10)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
