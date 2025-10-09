@@ -1,6 +1,6 @@
 <!-- CrazyFlie 2 simulation model, properties (e.g. sensors) mimic actual values -->
 <mujoco model="cf2">
-  <option integrator="RK4" density="1.225" viscosity="1.8e-5"/>
+  <option timestep="0.002" integrator="RK4" density="1.225" viscosity="1.8e-5"/>
 
   <compiler inertiafromgeom="false" meshdir="assets" autolimits="true"/>
 

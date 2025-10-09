@@ -11,7 +11,8 @@ import logging
 from run_manual_control import load_manual_steps
 from constants import SCENE_PATH, MODEL_SAVE_PATH, LOG_FILE_PATH
 from PPO_vec_agent import PPOAgentVec
-from hover_target_env_control import CrazyflieEnv
+# from hover_target_env_PID import CrazyflieEnv
+from hover_target_env_RL import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 ####################################
@@ -118,7 +119,7 @@ def train_PPO(
 ####################
 # Rendering PPO
 ####################
-def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int | None = 42, sleep_time: float = 1/120):
+def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int | None = 42):
     """
     Render trained PPO in a single environment
     """
@@ -127,16 +128,28 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int | None = 42, sle
     total_reward = 0.0
     with mujoco.viewer.launch_passive(env.mujoco_scene, env.data) as viewer:
         print("\nRunning final visualization based on learned policy")
+
+        # Adjust real-time render based on env frame skip and timestep
+        sim_dt = env.mujoco_scene.opt.timestep * getattr(env, "frame_skip", 1)
+        last_time = time.perf_counter()
+
         for _ in range(env.max_steps):
             action, _, _ = agent.sample_action(obs, deterministic=True)
             obs, reward, done, _, _ = env.step(action)
             total_reward += reward
 
             viewer.sync()
-            time.sleep(sleep_time)
+            
+            # Sleep the sim for real-time rendering
+            elapsed = time.perf_counter() - last_time
+            sleep_time = sim_dt - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            last_time = time.perf_counter()
 
             if done:
                 break
+
     print("\nSimulation complete.\n")
 
 
@@ -217,13 +230,13 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, -1.0, 2.0], dtype=np.float32),
-        max_steps=10000,
-        random_initialization=True,
+        target_pos=np.array([0.0, -0.2, 1.2], dtype=np.float32),
+        max_steps=1500,
+        random_initialization=False,
         debug=True
     )
     agent.track_obs_gradient = True
-    render_PPO(agent, render_env, seed=None, sleep_time=1/1000)
+    render_PPO(agent, render_env, seed=42)
 
     # Feature importance for each action
     rows = []

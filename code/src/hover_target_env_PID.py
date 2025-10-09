@@ -168,7 +168,7 @@ class CrazyflieEnv(gym.Env):
                 start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
                 start_z = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
 
-                self.data.qpos[base_qpos + 0] = start_x
+                self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i] + self.target_pos[0]
                 self.data.qpos[base_qpos + 1] = start_y + self.target_pos[1]
                 self.data.qpos[base_qpos + 2] = start_z + self.target_pos[2]
 
@@ -342,10 +342,15 @@ class CrazyflieEnv(gym.Env):
             if self.debug:
                 print(f"Step {self.timestep} - Ctrl: {[f'{c:.4f}' for c in ctrl]}, Position: {[f'{p:.2f}' for p in pos]}, Reward: {reward:.4f}")
         
-        # Apply control and step
+        # Apply control
         self.data.ctrl[:] = ctrl
         self.timestep += 1
-        mujoco.mj_step(self.mujoco_scene, self.data)
+
+        # Step for several actual physics steps in MuJoCo
+        # Using 2ms timestep and RK4 integrator, so 10 steps = 20ms (50Hz) (see cf2.xml = self.mujoco_scene.opt.timestep)
+        for _ in range(10):
+            mujoco.mj_step(self.mujoco_scene, self.data)
+            
         obs = self._get_obs()
 
         info = {
