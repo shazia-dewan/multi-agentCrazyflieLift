@@ -97,7 +97,8 @@ class PPOAgentVec:
         self,
         obs_dim: int,
         action_dim: int,
-        lr: float = 3e-4,
+        # Relatively high default lr due to us using lr annealing
+        lr: float = 3e-3,
         gamma: float = 0.99,
         clip_eps: float = 0.2,
         update_epochs: int = 2,

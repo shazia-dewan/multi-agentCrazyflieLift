@@ -46,10 +46,13 @@ class NeutralHoverController:
         dict of {thrust, roll, pitch, yaw} commands
         """
 
-        # Thrust (Z control): maintain neutral hover around z = 0.5
-        z = pos[2]
-        vz = vel[2]
-        thrust_cmd = self.base_thrust + KP_POS_Z * (-z + 0.5) - KD_VEL_Z * vz
+        # # Thrust (Z control): maintain neutral hover around z = 0.5
+        # z = pos[2]
+        # vz = vel[2]
+        # thrust_cmd = self.base_thrust + KP_POS_Z * (-z + 0.5) - KD_VEL_Z * vz
+
+        # Just using base hover for thrust (in RL context, let navigator agent go up/down)
+
 
         # Roll and Pitch based on current roll/pitch/yaw, angular velocity, and velocity
         roll, pitch, yaw = rpy
@@ -68,13 +71,13 @@ class NeutralHoverController:
 
 
         # Clip commands
-        thrust_cmd = np.clip(thrust_cmd,  0.0, 0.35)
+        # thrust_cmd = np.clip(thrust_cmd,  0.0, 0.35)
         roll_cmd  = np.clip(roll_cmd,  -1.0, 1.0)
         pitch_cmd = np.clip(pitch_cmd, -1.0, 1.0)
         yaw_cmd   = np.clip(yaw_cmd,   -1.0, 1.0)
 
         return {
-            "thrust": thrust_cmd,
+            "thrust": self.base_thrust,
             "roll": roll_cmd,
             "pitch": pitch_cmd,
             "yaw": yaw_cmd,

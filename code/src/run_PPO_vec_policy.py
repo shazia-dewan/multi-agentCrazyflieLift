@@ -9,9 +9,9 @@ from tabulate import tabulate
 import logging
 
 from run_manual_control import load_manual_steps
-from constants import SCENE_PATH, MODEL_SAVE_PATH
+from constants import SCENE_PATH, MODEL_SAVE_PATH, LOG_FILE_PATH
 from PPO_vec_agent import PPOAgentVec
-from hover_target_environment import CrazyflieEnv
+from hover_target_env_control import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 ####################################
@@ -50,8 +50,6 @@ def train_PPO(
     -----------
     envs : SubprocVecEnv or DummyVecEnv
         The SB3 vectorized wrapper for our envs
-    curriculum_stages: int
-        The number of curriculum env stages
     """
     # Set up logging, can be a lot of logs so save to a log file
     logging.basicConfig(
@@ -59,7 +57,7 @@ def train_PPO(
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler("run_logs_PPO_training.log", mode="w"),
+            logging.FileHandler(LOG_FILE_PATH, mode="w"),
         ],
     )
     logger = logging.getLogger(__name__)
@@ -71,9 +69,6 @@ def train_PPO(
     obs = envs.reset()
     episode_returns = np.zeros(num_envs)
     completed_episode_returns = []
-
-    # Training curriculum - scale linearly from [0, 1] based on current update
-    envs.set_attr("curriculum_factor", 0)
 
     for update in range(num_updates):
         for _ in range(update_steps):
@@ -99,7 +94,7 @@ def train_PPO(
                 if done:
                     if print_logs:
                         end_type = "terminated" if terminateds[i] else "TRUNCATED"
-                        logger.info(f"Update {update + 1}/{num_updates}: env {i + 1:2d} {end_type} an episode with return: {episode_returns[i]:.2f}")
+                        logger.info(f"Update {update + 1}/{num_updates}: env {i + 1:2d} {end_type} an episode with return: {episode_returns[i]:.3f}")
                     completed_episode_returns.append(episode_returns[i])
                     episode_returns[i] = 0.0
 
@@ -108,9 +103,11 @@ def train_PPO(
         _, _, last_values = agent.sample_action(obs, deterministic=True)
         agent.update_policy(last_values)
 
-        # Curriculum shift towards 1
-        logger.info(f"Changing curriculum factor to {update / num_updates}\n")
-        envs.set_attr("curriculum_factor", update / num_updates)
+        # Anneal lr param for policy and value optimizers (decreases lr over time based on number of updates)
+        lr_now = agent.lr * (1.0 - update / num_updates)
+        for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr_now
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -162,7 +159,7 @@ if __name__ == "__main__":
         help="Before PPO training, bootstrap the model offline from manual control steps."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_steps", type=int, default=300_000, help="Total timesteps for training")
+    parser.add_argument("--total_steps", type=int, default=225_000, help="Total timesteps for training")
     parser.add_argument("--update_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
@@ -220,9 +217,8 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, -0.1, 1.0], dtype=np.float32),
+        target_pos=np.array([0.0, -1.0, 2.0], dtype=np.float32),
         max_steps=10000,
-        curriculum_factor=1,
         random_initialization=True,
         debug=True
     )
@@ -243,7 +239,7 @@ if __name__ == "__main__":
         score_sum = sum(scores)
         rows.append([idx, feature_name] + scores + [score_sum])
 
-    headers = ["Idx", "Feature", "Thrust", "Roll", "Pitch", "Yaw", "Sum"]
+    headers = ["Idx", "Feature", "Vel_x", "Vel_y", "Vel_z", "Sum"]
     sortby = "Sum"
     col_idx = headers.index(sortby)
     rows.sort(key=lambda x: x[col_idx], reverse=True)
@@ -252,7 +248,7 @@ if __name__ == "__main__":
     rows_formatted = [[r[0], r[1]] + [f"{s:.4f}" for s in r[2:]] for r in rows]
 
     # Save feature importance results to a CSV
-    out_dir = os.path.join(os.path.dirname(__file__), "..", "output_feature_importance")
+    out_dir = os.path.join(os.path.dirname(__file__), "..", "run_output")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "feature_importance.csv")
 

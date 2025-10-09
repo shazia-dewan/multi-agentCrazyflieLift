@@ -4,16 +4,17 @@ import re
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-LOG_FILE = "run_logs_PPO_training.log"
+from constants import LOG_FILE_PATH
 
 # Regex pattern to extract update and return value
 line_pattern = re.compile(
-    r"Update\s+(\d+)/\d+:\s+env\s+\d+\s+terminated an episode with return:\s+([-\d\.]+)"
+    r"Update\s+(\d+)/\d+:\s+env\s+\d+\s+(?:terminated|TRUNCATED)\s+an episode with return:\s*(-?\d+(?:\.\d+)?)"
 )
+
 
 # Read the log file, track returns per update
 returns_by_update = defaultdict(list)
-with open(LOG_FILE, "r") as f:
+with open(LOG_FILE_PATH, "r") as f:
     for line in f:
         match = line_pattern.search(line)
         if match:

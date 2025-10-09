@@ -15,7 +15,7 @@ from pynput import keyboard
 import pickle
 
 from constants import SCENE_PATH
-from hover_target_environment import CrazyflieEnv
+from hover_target_env_control import CrazyflieEnv
 from PPO_vec_agent import PPOAgentVec
 
 # Store manual step info (obs, action, reward, done) so it can be used to train the agent by imitation
@@ -134,14 +134,13 @@ if __name__ == "__main__":
     start_y = np.random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
     start_z = np.random.uniform(0.5, TRAINING_POS_RANGE)
 
-    print(start_y, start_z)
-
     env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
         target_pos=np.array([0.0, start_y, start_z], dtype=np.float32),
         max_steps=3000,
         random_initialization=False,
+        manual_override = True,
         debug=True
     )
 

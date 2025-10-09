@@ -20,6 +20,13 @@ MULTI_SCENE_PATH = os.path.join(
 MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
-    "models", 
+    "rl_models", 
     "ppo_model.pt"
+)
+
+LOG_FILE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "run_output", 
+    "run_logs_PPO_training.log"
 )

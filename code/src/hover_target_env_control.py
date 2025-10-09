@@ -5,19 +5,18 @@ import mujoco
 from typing import Any, Optional
 from scipy.spatial.transform import Rotation as R
 
+from PID_controller import NeutralHoverController
 from reward_system import RewardTracker
 
-BASE_HOVER_THRUST = 0.26487
 
 TRAINING_POS_RANGE = 1.0
-TRAINING_QUAT_RANGE = np.pi / 6
-TRAINING_VEL_RANGE = 0.5
-TRAINING_ANG_VEL_RANGE = 0.25
 
 OUT_OF_BOUNDS_RANGE = 2.0
 
-# Curriculum works down from max stage --> 1, the TRAINING constants above are scaled by value / curriculum_stage
-MAX_CURRICULUM_STAGE = 10
+RL_RESIDUAL_THRUST = 0.01
+RL_RESIDUAL_ROTATE = 0.01
+
+TERMINATION_PENALTY = -1
 
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
@@ -28,9 +27,8 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
         max_steps: int = 1500,
-        curriculum_factor: int = 1,
         random_initialization: bool = True,
-        learning_to_control = True,
+        manual_override = False,
         debug: bool = False,
     ):
         """
@@ -46,12 +44,10 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition for episodes (when we have reached max_steps)
-        curriculum_factor : float
-            [0, 1] based on progress in the training (curriculum)
         random_initialization : bool
             Whether to randomly initialize target pos and drone pos/rotation
-        learning_to_control : bool
-            Changes reward to incentivize control over navigation
+        manual_override : bool
+            If true, uses sampled action directly in step(), ignoring PID control
         debug : bool
             Enables some logging (may remove later)
         """
@@ -70,9 +66,8 @@ class CrazyflieEnv(gym.Env):
         self.num_drones = num_drones
         self.target_pos = target_pos
         self.max_steps = max_steps
-        self.curriculum_factor = curriculum_factor
         self.random_initialization = random_initialization
-        self.learning_to_control = learning_to_control
+        self.manual_override = manual_override
         self.debug = debug
 
         # Index of observations for logging afterwards (e.g. which observations were important)
@@ -87,8 +82,6 @@ class CrazyflieEnv(gym.Env):
         act_high = np.tile([0.35, 1, 1, 1], self.num_drones).astype(np.float32)
         act_low = np.tile([0.0, -1, -1, -1], self.num_drones).astype(np.float32)
         self.action_space = spaces.Box(act_low, act_high, dtype=np.float32)
-
-        self.survival_bonus = 1 / self.max_steps
 
         # Viewer
         self.viewer = None
@@ -129,6 +122,7 @@ class CrazyflieEnv(gym.Env):
         super().reset(seed=seed)
 
         mujoco.mj_resetData(self.mujoco_scene, self.data)
+        self.state = np.zeros((self.num_drones, self.qpos_per_drone + self.qvel_per_drone), dtype=np.float32)
 
         self.starting_pos = np.zeros((self.num_drones, 3), dtype=np.float32)
 
@@ -163,50 +157,22 @@ class CrazyflieEnv(gym.Env):
         drone_spacing_x = 0.4
         drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
 
-        # Start drone at some random pos [X, Y, Z] and quat [w, x, y, z]
+        # Start drone at some random pos [X, Y, Z] around the target with random velocity
         if self.random_initialization:
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
+                base_qvel = i * self.qvel_per_drone
                 
-                # Random position
-                start_x = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
-                start_y = self.np_random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
-                start_z = self.np_random.uniform(0.1, TRAINING_POS_RANGE)
+                # Random starting position
+                start_x = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_y = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
+                start_z = self.np_random.uniform(-TRAINING_POS_RANGE, TRAINING_POS_RANGE)
 
-                self.data.qpos[base_qpos + 0] = 0.0 + drone_offsets_x[i]
-                self.data.qpos[base_qpos + 1] = start_y
-                self.data.qpos[base_qpos + 2] = start_z
+                self.data.qpos[base_qpos + 0] = start_x
+                self.data.qpos[base_qpos + 1] = start_y + self.target_pos[1]
+                self.data.qpos[base_qpos + 2] = start_z + self.target_pos[2]
 
-                self.starting_pos[i] = np.array([self.data.qpos[base_qpos + 0], self.data.qpos[base_qpos + 1], self.data.qpos[base_qpos + 2]])
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
-
-
-                # Random rotation axis with small rotation angle
-                # axis = self.np_random.normal(size=3)
-                # TESTING ON X AXIS ONLY FOR NOW
-                axis = np.array([1.0, 0.0, 0.0])
-                axis /= np.linalg.norm(axis)
-
-                angle = self.np_random.uniform(-TRAINING_QUAT_RANGE, TRAINING_QUAT_RANGE)
-
-                w = np.cos(angle / 2.0)
-                x, y, z = axis * np.sin(angle / 2.0)
-
-                quat = np.array([w, x, y, z], dtype=np.float64)
-                self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
-
-                # Random starting linear velocity
-                vel_y = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                vel_z = self.np_random.uniform(-TRAINING_VEL_RANGE, TRAINING_VEL_RANGE)
-                vel_x = 0.0
-                self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
-
-                # Random starting angular velocity
-                ang_vel_x = self.np_random.uniform(-TRAINING_ANG_VEL_RANGE, TRAINING_ANG_VEL_RANGE)
-                ang_vel_y = 0.0
-                ang_vel_z = 0.0
-                self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
-
         else:
             # Start drone(s) at consistent Z with X offset per drone
             for i in range(self.num_drones):
@@ -216,10 +182,26 @@ class CrazyflieEnv(gym.Env):
                 self.data.qpos[base_qpos + 2] = 1.0
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
-        
+
+        # Store initial state and starting pos
+        for i in range(self.num_drones):
+            base_qpos = i * self.qpos_per_drone
+            base_qvel = i * self.qvel_per_drone
+
+            self.state[i] = np.concatenate([
+                self.data.qpos[base_qpos : base_qpos + 3],
+                self.data.qpos[base_qpos + 3 : base_qpos + 7],
+                self.data.qvel[base_qvel : base_qvel + 3],
+                self.data.qvel[base_qvel + 3 : base_qvel + 6]
+            ])
+
+            self.starting_pos[i] = self.data.qpos[base_qpos : base_qpos + 3].copy()
+
+        # Stability PID controller
+        self.controller = NeutralHoverController(target_yaw=0.0)
+
         self.timestep = 0
 
-        # Define reward system
         self.reward_tracker = RewardTracker()
 
         return self._get_obs(), {}
@@ -247,9 +229,6 @@ class CrazyflieEnv(gym.Env):
         target_geom_id = mujoco.mj_name2id(self.mujoco_scene, mujoco.mjtObj.mjOBJ_GEOM, "target")
         self.mujoco_scene.geom_pos[target_geom_id] = self.target_pos
 
-        # Clip action within action space
-        action = np.clip(action, self.action_space.low, self.action_space.high)
-
         # Termination values
         reward = 0.0
         terminated = False
@@ -269,110 +248,100 @@ class CrazyflieEnv(gym.Env):
             vel = self.data.qvel[base_qvel: base_qvel + 3]
             ang_vel = self.data.qvel[base_qvel + 3: base_qvel + 6]
 
-            #############################################
-            # RL Controls
-            #############################################
+            self.state[i] = np.concatenate([pos, quat, vel, ang_vel])
+
+            ###########################################################
+            # Stability PID control + RL Control for navigation
+            ###########################################################
+
             base_ctrl = i * self.ctrl_per_drone
 
-            thrust = np.clip(action[base_ctrl + 0], 0.0, 0.35)
-            roll   = np.clip(action[base_ctrl + 1], -1, 1)
-            pitch  = np.clip(action[base_ctrl + 2], -1, 1)
-            yaw    = np.clip(action[base_ctrl + 3], -1, 1)
+            # Get euler for stability controller, scipy uses [x, y, z, w]
+            quat_xyzw = np.roll(quat, -1)
+            euler = R.from_quat(quat_xyzw).as_euler('xyz')
+            pid_ctrl = self.controller.update(pos, vel, euler, ang_vel)
 
-            ctrl[base_ctrl + 0] = thrust
-            ctrl[base_ctrl + 1] = roll
-            ctrl[base_ctrl + 2] = 0.0
-            ctrl[base_ctrl + 3] = 0.0
+            # Clip RL residual control within a small degree (just navigation adjustments)
+            thrust_rl = np.clip(action[base_ctrl + 0], 0.0, 0.35)
+            roll_rl   = np.clip(action[base_ctrl + 1], -RL_RESIDUAL_ROTATE, RL_RESIDUAL_ROTATE)
+            pitch_rl  = np.clip(action[base_ctrl + 2], -RL_RESIDUAL_ROTATE, RL_RESIDUAL_ROTATE)
+            yaw_rl    = np.clip(action[base_ctrl + 3], -RL_RESIDUAL_ROTATE, RL_RESIDUAL_ROTATE)
 
-            # Update action history: shift left and append current action
+            # Scale down as we approach the target and just want neutral PID hover
+            proximity_function = np.tanh(np.linalg.norm(self.target_pos - pos))
+            
+            ctrl_action = np.array([
+                thrust_rl,
+                pid_ctrl["roll"] + roll_rl * proximity_function,
+                pid_ctrl["pitch"] + pitch_rl * proximity_function,
+                pid_ctrl["yaw"] + yaw_rl * proximity_function
+            ])
+
+            if self.manual_override:
+                ctrl_action = np.array([action[base_ctrl + 0], action[base_ctrl + 1], action[base_ctrl + 2], action[base_ctrl + 3]])
+                print(f"Velocity: {vel[0]:.5f}, {vel[1]:.5f}, {vel[2]:.5f}")
+
+            # Clip action within action space
+            ctrl_action = np.clip(ctrl_action, self.action_space.low, self.action_space.high)
+
+            ctrl[base_ctrl + 0] = ctrl_action[0]
+            ctrl[base_ctrl + 1] = ctrl_action[1]
+            ctrl[base_ctrl + 2] = ctrl_action[2]
+            ctrl[base_ctrl + 3] = ctrl_action[3]
+
+            # Update action history: shift left and append current roll and pitch
             self.action_history[i, :-1] = self.action_history[i, 1:]
-            self.action_history[i, -1] = ctrl[base_ctrl: base_ctrl + self.ctrl_per_drone]
-
+            self.action_history[i, -1] = np.array([thrust_rl, roll_rl, pitch_rl, yaw_rl])
 
             ##############################################
-            # Rewards
+            # Rewards, Termination, and Truncation
             ##############################################
-            quat_error = 1.0 - quat[0]
-            action_error = np.array([thrust, roll, pitch, yaw]) - np.array([0.26487, 0, 0, 0])
 
-            # Scale some rewards as curriculum progresses and navigation becomes more important than survival
-            curriculum_scaling = MAX_CURRICULUM_STAGE * self.curriculum_factor + 1
+            pos_error = self.target_pos - pos
+            distance_to_target = np.linalg.norm(pos_error)
 
-            # Get drone rotation matrix for drone-relative coordinates
-            quat_xyzw = np.roll(quat, -1) # scipy uses [x, y, z, w]
+            # Reward for moving closer to target
+            # Doubles as thrust reward since thrust is very responsive, roll/pitch/yaw are not
+            distance_to_target_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
+            distance_improvement = distance_to_target_old - distance_to_target
+            self.reward_tracker.update("distance_improvement", distance_improvement)
+
             rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+            direction_to_target = pos_error / (distance_to_target + 1e-9)
+            direction_to_target_body = rotation_matrix.T @ direction_to_target
 
-            if self.learning_to_control:
-                # Reward/penalty for rolling against/into velocity on drone Y (roll-controlled) axis to counteract velocity
-                velocity_direction = vel / (np.linalg.norm(vel) + 1e-9)
-                velocity_direction_body = rotation_matrix.T @ velocity_direction
-                roll_away_from_velocity = 0.001 * -np.sign(roll) * velocity_direction_body[1]
-                self.reward_tracker.update("roll_away_from_velocity", roll_away_from_velocity)
-                
-                # # Reward/penalty for rolling against/into angular velocity on drone X
-                # angular_velocity_direction = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
-                # angular_velocity_direction_body = rotation_matrix.T @ angular_velocity_direction
-                # roll_away_from_angular_velocity = 0.005 * np.sign(roll) * angular_velocity_direction_body[0]
-                # self.reward_tracker.update("roll_away_from_angular_velocity", roll_away_from_angular_velocity)
+            # Reward/penalty for rolling towards/away from target on drone Y (roll) axis
+            roll_towards_target_y = 0.001 * np.sign(roll_rl) * direction_to_target_body[1]
+            self.reward_tracker.update("roll_towards_target_y", roll_towards_target_y)
 
-                # Survival bonus
-                self.reward_tracker.update("survival", self.survival_bonus)
+            # Reward/penalty for pitching towards/away from target on drone X (pitch) axis
+            pitch_towards_target_x = -1 * 0.001 * np.sign(pitch_rl) * direction_to_target_body[0]
+            self.reward_tracker.update("pitch_towards_target_x", pitch_towards_target_x)
+
+            reward = self.reward_tracker.step_total()
+
+            # Crash, terminate with penalty
+            if pos[2] < 0.05:
+                self.reward_tracker.update("crash", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
+                terminated = True
 
-                # Crash, terminate with penalty
-                if pos[2] < 0.05:
-                    self.reward_tracker.update("crash", -2)
-                    reward = self.reward_tracker.step_total()
-                    terminated = True
-
-                # Deviated too far from origin
-                distance_from_origin = np.linalg.norm(pos - self.starting_pos[i])
-                if distance_from_origin > OUT_OF_BOUNDS_RANGE:
-                    self.reward_tracker.update("out_of_bounds", -2)
-                    reward = self.reward_tracker.step_total()
-                    terminated = True
-            else:
-                # Reward for moving closer to target
-                # Compare new & old distance to generate a per step reward (-dist_new alone may not signal improvement)
-                distance_to_target_old = np.linalg.norm(self.target_pos - self.prev_pos[i])
-                pos_error = self.target_pos - pos
-                distance_to_target = np.linalg.norm(pos_error)
-                distance_improvement = curriculum_scaling * (distance_to_target_old - distance_to_target)
-                self.reward_tracker.update("distance_improvement", distance_improvement)
-
-                # absolute tanh function that scales to 0 as we approach the target on the Y axis
-                y_target_proximity_function = abs(np.tanh(pos_error[1]))
-
-                # Reward/penalty for rolling towards/away from target on drone Y (roll-controlled) axis
-                # Scaled by the proximity function because rolling towards target is more important when far away from target
-                direction_to_target = pos_error / (distance_to_target + 1e-9)
-                direction_to_target_body = rotation_matrix.T @ direction_to_target
-                roll_towards_target_y = curriculum_scaling * 0.001 * np.sign(roll) * direction_to_target_body[1] * (y_target_proximity_function + 0.1)
-                # self.reward_tracker.update("roll_towards_target", roll_towards_target_y)
-                
-                # TESTING ANOTHER ROLL TOWARD TARGET VERSION
-                # Penalize rolling away from target more (reward and penalty can even out otherwise when going in wrong direction)
-                right_direction_scaling = 0.0002 if roll_towards_target_y >= 0 else 0.0004
-                roll_towards_target = curriculum_scaling * right_direction_scaling * roll_towards_target_y
-                self.reward_tracker.update("roll_towards_target", roll_towards_target)
-
-                # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
-                initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
-                if distance_to_target > initial_distance_to_target + OUT_OF_BOUNDS_RANGE:
-                    self.reward_tracker.update("out_of_bounds", -2)
-                    reward = self.reward_tracker.step_total()
-                    terminated = True
+            # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
+            initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
+            if distance_to_target > initial_distance_to_target + OUT_OF_BOUNDS_RANGE:
+                self.reward_tracker.update("out_of_bounds", TERMINATION_PENALTY)
+                reward = self.reward_tracker.step_total()
+                terminated = True
 
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps
 
-            # Update prev pos for next timestep
+            # Update prev pos
             self.prev_pos[i] = pos.copy()
-            self.prev_control[i] = ctrl[base_ctrl : base_ctrl + self.ctrl_per_drone].copy()
 
             if self.debug:
                 print(f"Step {self.timestep} - Ctrl: {[f'{c:.4f}' for c in ctrl]}, Position: {[f'{p:.2f}' for p in pos]}, Reward: {reward:.4f}")
-            
+        
         # Apply control and step
         self.data.ctrl[:] = ctrl
         self.timestep += 1

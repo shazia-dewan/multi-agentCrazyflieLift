@@ -28,18 +28,18 @@ class PolicyNetwork(nn.Module):
 
         # Define our policy neural network (NN)
         # Feedforward fully connected MLP with two hidden layers 
-        # Input/Observations --> Linear & Tanh --> Linear & Tanh --> Linear --> Output/Actions
+        # Input/Observations --> Linear & ReLU --> Linear & ReLU --> Linear --> Output/Actions
 
         super().__init__()
 
         self.net = nn.Sequential(
             # Map input layer (observations) into the first hidden layer linearly
             nn.Linear(obs_dim, hidden_size),
-            # Apply non-linear tanh activation function per neuron (activation values on [-1, 1])
-            nn.Tanh(),
-            # Map hidden layer 1 into hidden layer 2 linearly + tanh activation
+            # Apply non-linear ReLU activation function per neuron (activation values on [-1, 1])
+            nn.ReLU(),
+            # Map hidden layer 1 into hidden layer 2 linearly + ReLU activation
             nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
+            nn.ReLU(),
             # Map hidden layer 2 into output layer (actions, in this case the mean of the Gaussian action distribution)
             nn.Linear(hidden_size, action_dim)
         )
@@ -97,14 +97,14 @@ class ValueNetwork(nn.Module):
 
         # Value function NN is similar to policy NN but outputs the state value
         # Feedforward fully connected MLP with two hidden layers 
-        # Input/Observations --> Linear & Tanh --> Linear & Tanh --> Linear --> State Value
+        # Input/Observations --> Linear & ReLU --> Linear & ReLU --> Linear --> State Value
 
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(obs_dim, hidden_size),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_size, hidden_size),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_size, 1)
         )
 
