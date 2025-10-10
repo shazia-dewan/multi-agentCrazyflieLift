@@ -64,5 +64,10 @@
     - Rewards for survival, moving towards target, and proximity to target
   - Results
     - Successful YZ hover, some oscillation / instability but the agent always orients towards and stays near the target
-      - Will likely test some other reward metrics for stability such as rewarding low velocity, rotation, etc... before extending to full 3D
   - Agent was trained with 8 parallel envs and 600k timesteps
+
+**Model: xyz_hover**
+- yz_hover model extended to XYZ, still some oscillation but the agent has learned to hover at a target successfuly in 3D
+  - 8 parallel envs, 600k timesteps
+- Next steps:
+  - Test some other reward metrics for stability such as rewarding low velocity, rotation, etc...

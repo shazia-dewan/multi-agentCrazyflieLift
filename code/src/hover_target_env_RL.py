@@ -19,6 +19,8 @@ OUT_OF_BOUNDS_RANGE = 2.0
 
 TERMINATION_PENALTY = -1.0
 
+MAX_CURRICULUM_STEPS = 10
+
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
@@ -93,7 +95,8 @@ class CrazyflieEnv(gym.Env):
         self.viewer = None
 
     def update_curriculum(self, next_curriculum_step: int):
-        self.current_curriculum_step = next_curriculum_step
+        if next_curriculum_step <= MAX_CURRICULUM_STEPS:
+            self.current_curriculum_step = next_curriculum_step
 
     def add_feature_names(self, name_list: list[str], values: np.ndarray) -> np.ndarray:
         """
@@ -191,7 +194,6 @@ class CrazyflieEnv(gym.Env):
 
                 # Random rotation axis with small rotation angle
                 axis = self.np_random.normal(size=3)
-                axis = np.array([1.0, 0.0, 0.0])
                 axis /= np.linalg.norm(axis)
 
                 angle = self.np_random.uniform(-current_quat_range, current_quat_range)
@@ -205,13 +207,13 @@ class CrazyflieEnv(gym.Env):
                 # Random starting linear velocity
                 vel_y = self.np_random.uniform(-current_vel_range, current_vel_range)
                 vel_z = self.np_random.uniform(-current_vel_range, current_vel_range)
-                vel_x = 0.0
+                vel_x = self.np_random.uniform(-current_vel_range, current_vel_range)
                 self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
 
                 # Random starting angular velocity
                 ang_vel_x = self.np_random.uniform(-current_ang_vel_range, current_ang_vel_range)
-                ang_vel_y = 0.0
-                ang_vel_z = 0.0
+                ang_vel_y = self.np_random.uniform(-current_ang_vel_range, current_ang_vel_range)
+                ang_vel_z = self.np_random.uniform(-current_ang_vel_range, current_ang_vel_range)
                 self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
 
                 # Start at neutral control
@@ -295,11 +297,8 @@ class CrazyflieEnv(gym.Env):
 
             # Clip action within action space
             ctrl_action = np.clip(action[base_ctrl : base_ctrl + 4], self.action_space.low, self.action_space.high)
-
-            # Only testing thrust and roll for now
-            # ctrl[base_ctrl : base_ctrl + 4] = ctrl_action
-            ctrl[base_ctrl : base_ctrl + 4] = np.array([ctrl_action[0], ctrl_action[1], 0.0, 0.0], dtype=np.float32)
-
+            ctrl[base_ctrl : base_ctrl + 4] = ctrl_action
+            
             # Update action history: shift left and append current roll and pitch
             self.action_history[i, :-1] = self.action_history[i, 1:]
             self.action_history[i, -1] = ctrl_action

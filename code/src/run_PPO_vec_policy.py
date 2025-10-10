@@ -220,8 +220,9 @@ if __name__ == "__main__":
             _, _, last_values = agent.sample_action(agent.buffer.observations[-1], deterministic=True)
             agent.update_policy(last_values)
     
-        # Train the agent with PPO
-        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, curriculum_steps=10)
+        # Train the agent with PPO with curriculum stages
+        curriculum_steps = 10
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, curriculum_steps=curriculum_steps)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
@@ -240,7 +241,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.2, 1.2], dtype=np.float32),
+        target_pos=np.array([-0.2, 0.2, 0.5], dtype=np.float32),
         max_steps=1500,
         random_initialization=False,
         debug=True

@@ -12,7 +12,7 @@ class PolicyNetwork(nn.Module):
     Representation of the policy neural network using PyTorch.
     Outputs the mean and standard deviation of a Gaussian policy for continuous actions.
     """
-    def __init__(self, obs_dim: int, action_dim: int, hidden_size: int = 64):
+    def __init__(self, obs_dim: int, action_dim: int, hidden_size: int = 128):
         """
         Initialize neural network.
 
@@ -83,7 +83,7 @@ class ValueNetwork(nn.Module):
     Representation of the value function neural network using PyTorch.
     Outputs the scalar value of a state.
     """
-    def __init__(self, obs_dim: int, hidden_size: int = 64):
+    def __init__(self, obs_dim: int, hidden_size: int = 128):
         """
         Initialize the value network.
 
