@@ -5,9 +5,9 @@ from typing import Any, Callable, Union
 import torch
 
 from constants import SCENE_PATH
-from PPO_vec_agent import PPOAgentVec
+from PPO_agent import PPOAgentVec
 from hover_target_env_RL import CrazyflieEnv
-from run_PPO_vec_policy import train_PPO, make_env
+from run_PPO_policy import train_PPO, make_env
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 # Result directory for output files

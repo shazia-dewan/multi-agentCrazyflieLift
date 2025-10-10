@@ -10,7 +10,7 @@ import logging
 
 from run_manual_control import load_manual_steps
 from constants import SCENE_PATH, MODEL_SAVE_PATH, LOG_FILE_PATH
-from PPO_vec_agent import PPOAgentVec
+from PPO_agent import PPOAgentVec
 # from hover_target_env_PID import CrazyflieEnv
 from hover_target_env_RL import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv

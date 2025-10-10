@@ -1,3 +1,5 @@
+# Run a trained model against a series of target positions and track returns
+
 import argparse
 import os
 import numpy as np
@@ -5,7 +7,7 @@ from tabulate import tabulate
 
 from constants import SCENE_PATH
 from hover_target_env_RL import CrazyflieEnv
-from PPO_vec_agent import PPOAgentVec
+from PPO_agent import PPOAgentVec
 
 def evaluate(agent: PPOAgentVec, env: CrazyflieEnv) -> float:
     """
