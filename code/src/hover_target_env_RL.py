@@ -184,6 +184,7 @@ class CrazyflieEnv(gym.Env):
                 # Random starting position around the target, using a normal distribution so that the agent
                 # can sample far distances early on and avoids overfitting to small ranges
                 std_pos = current_pos_range / 2
+
                 start_x = self.np_random.normal(loc=self.target_pos[0], scale=std_pos)
                 start_y = self.np_random.normal(loc=self.target_pos[1], scale=std_pos)
                 start_z = self.np_random.normal(loc=self.target_pos[2], scale=std_pos)
@@ -342,8 +343,8 @@ class CrazyflieEnv(gym.Env):
 
             reward = self.reward_tracker.step_total()
 
-            # Crash (after n steps since we start on the floor during eval), terminate with penalty
-            if pos[2] < 0.05 and self.timestep > 100:
+            # Crash, terminate with penalty
+            if pos[2] < 0.05 and vel[2] < -0.1:
                 self.reward_tracker.update("crash", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
                 terminated = True
