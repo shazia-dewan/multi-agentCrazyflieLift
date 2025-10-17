@@ -5,7 +5,6 @@ import mujoco
 from typing import Any, Optional
 from scipy.spatial.transform import Rotation as R
 
-from PID_controller import NeutralHoverController
 from reward_system import RewardTracker
 
 BASE_HOVER_THRUST = 0.26487
@@ -19,8 +18,6 @@ OUT_OF_BOUNDS_RANGE = 2.0
 
 TERMINATION_PENALTY = -1.0
 
-MAX_CURRICULUM_STEPS = 10
-
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
@@ -30,6 +27,7 @@ class CrazyflieEnv(gym.Env):
         num_drones: int = 1, 
         target_pos: np.ndarray = np.array([0.0, 0.0, 1.0], dtype=np.float32),
         max_steps: int = 1500,
+        max_curriculum_steps: int = 10,
         random_initialization: bool = True,
         manual_override = False,
         debug: bool = False,
@@ -47,10 +45,12 @@ class CrazyflieEnv(gym.Env):
             Target position the drone will fly to and hover at
         max_steps : int
             Termination condition for episodes (when we have reached max_steps)
+        max_curriculum_steps : int
+            Number of curriculum steps to use during training
         random_initialization : bool
             Whether to randomly initialize target pos and drone pos/rotation
         manual_override : bool
-            If true, uses sampled action directly in step(), ignoring PID control
+            If true, uses sampled action directly in step()
         debug : bool
             Enables some logging (may remove later)
         """
@@ -69,6 +69,7 @@ class CrazyflieEnv(gym.Env):
         self.num_drones = num_drones
         self.target_pos = target_pos
         self.max_steps = max_steps
+        self.max_curriculum_steps = max_curriculum_steps
         self.random_initialization = random_initialization
         self.manual_override = manual_override
         self.debug = debug
@@ -95,7 +96,7 @@ class CrazyflieEnv(gym.Env):
         self.viewer = None
 
     def update_curriculum(self, next_curriculum_step: int):
-        if next_curriculum_step <= MAX_CURRICULUM_STEPS:
+        if next_curriculum_step <= self.max_curriculum_steps:
             self.current_curriculum_step = next_curriculum_step
 
     def add_feature_names(self, name_list: list[str], values: np.ndarray) -> np.ndarray:
@@ -169,7 +170,7 @@ class CrazyflieEnv(gym.Env):
         drone_spacing_x = 0.4
         drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
 
-        # Start drone at some random pos [X, Y, Z] around the target with random velocity
+        # Advance random initialization ranges state based on curriculum step
         current_pos_range = TRAINING_POS_RANGE * self.current_curriculum_step
         current_quat_range = TRAINING_QUAT_RANGE * self.current_curriculum_step
         current_vel_range = TRAINING_VEL_RANGE * self.current_curriculum_step
@@ -180,10 +181,12 @@ class CrazyflieEnv(gym.Env):
                 base_qpos = i * self.qpos_per_drone
                 base_qvel = i * self.qvel_per_drone
                 
-                # Random starting position around the target
-                start_x = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[0]
-                start_y = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[1]
-                start_z = self.np_random.uniform(-current_pos_range, current_pos_range) + self.target_pos[2]
+                # Random starting position around the target, using a normal distribution so that the agent
+                # can sample far distances early on and avoids overfitting to small ranges
+                std_pos = current_pos_range / 2
+                start_x = self.np_random.normal(loc=self.target_pos[0], scale=std_pos)
+                start_y = self.np_random.normal(loc=self.target_pos[1], scale=std_pos)
+                start_z = self.np_random.normal(loc=self.target_pos[2], scale=std_pos)
 
                 self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = start_y
@@ -241,9 +244,6 @@ class CrazyflieEnv(gym.Env):
             ])
 
             self.starting_pos[i] = self.data.qpos[base_qpos : base_qpos + 3].copy()
-
-        # Stability PID controller
-        self.controller = NeutralHoverController(target_yaw=0.0)
 
         self.timestep = 0
 
@@ -342,8 +342,8 @@ class CrazyflieEnv(gym.Env):
 
             reward = self.reward_tracker.step_total()
 
-            # Crash, terminate with penalty (only during training, during eval we can start on the floor)
-            if pos[2] < 0.05 and vel[2] < -0.1:
+            # Crash (after n steps since we start on the floor during eval), terminate with penalty
+            if pos[2] < 0.05 and self.timestep > 100:
                 self.reward_tracker.update("crash", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
                 terminated = True
@@ -420,7 +420,6 @@ class CrazyflieEnv(gym.Env):
 
             # ---------------------------------------------------------------------
             # Positional engineered features
-            # E.g. derivative and integral pos error to help model PID controller
             # ---------------------------------------------------------------------
 
             # Relative pos

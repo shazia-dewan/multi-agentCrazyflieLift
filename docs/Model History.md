@@ -68,6 +68,6 @@
 
 **Model: xyz_hover**
 - yz_hover model extended to XYZ, still some oscillation but the agent has learned to hover at a target successfuly in 3D
-  - 8 parallel envs, 600k timesteps
+  - 8 parallel envs, 600k timesteps, curriculum that progresses the range of random initial pos/rot/vel/ang_vel
 - Next steps:
   - Test some other reward metrics for stability such as rewarding low velocity, rotation, etc...

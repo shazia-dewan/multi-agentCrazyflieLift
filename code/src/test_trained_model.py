@@ -28,6 +28,7 @@ def evaluate(agent: PPOAgentVec, env: CrazyflieEnv) -> float:
     obs, _ = env.reset(seed=42)
     done = False
     ep_reward = 0.0
+    done_type = "N/A"
 
     while not done:
         action, _, _ = agent.sample_action(obs, deterministic=True)
@@ -35,7 +36,10 @@ def evaluate(agent: PPOAgentVec, env: CrazyflieEnv) -> float:
         done = terminated or truncated
         ep_reward += reward
 
-    return ep_reward
+        if done:
+            done_type = "terminated !" if terminated else "truncated"
+
+    return ep_reward, done_type
 
 
 def main():
@@ -60,7 +64,7 @@ def main():
         num_drones=1,
         max_steps=1500,
         random_initialization=False,
-        debug=True
+        debug=False
     )
     agent = PPOAgentVec(
         obs_dim=env.observation_space.shape[0],
@@ -89,29 +93,33 @@ def main():
 
         # XYZ hover close
         np.array([0.2, 0.2, 0.2], dtype=np.float32),
+        np.array([-0.8, 0.5, 0.4], dtype=np.float32),
         np.array([1.0, 1.0, 1.0], dtype=np.float32),
 
-        # XYZ hover far
-        np.array([3.0, 3.0, 0.2], dtype=np.float32),
-        np.array([5.0, 5.0, 3.0], dtype=np.float32),
+        # XYZ hover medium
+        np.array([0.5, 0.5, 2.0], dtype=np.float32),
+        np.array([2.0, 1.5, 1.0], dtype=np.float32),
         np.array([-1.5, 1.5, 1.5], dtype=np.float32),
+
+        # XYZ hover far
+        np.array([-2.5, 2.5, 2.5], dtype=np.float32),
+        np.array([4.0, 4.0, 3.0], dtype=np.float32),
         np.array([7.0, -7.0, 2.5], dtype=np.float32),
     ]
 
     results = []
     for i, target in enumerate(target_positions):
+        print(f"Evaluating target {i}: {target}")
         env.target_pos = target
-        episode_return = evaluate(agent, env)
-        results.append((i, target.tolist(), episode_return))
-
-    avg_return = np.mean([r[2] for r in results])
+        episode_return, done_type = evaluate(agent, env)
+        results.append((i, target.tolist(), episode_return, done_type))
 
     table = [
-        (idx, str([round(p, 1) for p in pos]), f"{ret:.2f}")
-        for idx, pos, ret in results
+        (idx, str([round(p, 1) for p in pos]), f"{ret:.2f}", done_type)
+        for idx, pos, ret, done_type in results
     ]
     print("\nHover Evaluation Results")
-    print(tabulate(table, headers=["Target #", "Target Position [x, y, z]", "Return"]))
+    print(tabulate(table, headers=["Target #", "Target Position [x, y, z]", "Return", "End condition"], tablefmt="fancy_grid"))
 
 if __name__ == "__main__":
     main()

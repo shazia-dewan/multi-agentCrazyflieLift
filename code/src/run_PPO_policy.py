@@ -11,9 +11,10 @@ import logging
 from run_manual_control import load_manual_steps
 from constants import SCENE_PATH, MODEL_SAVE_PATH, LOG_FILE_PATH
 from PPO_agent import PPOAgentVec
-# from hover_target_env_PID import CrazyflieEnv
 from hover_target_env_RL import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
+
+TRAINING_CURRICULUM_STEPS = 10
 
 ####################################
 # Env factory for parallelism
@@ -26,7 +27,8 @@ def make_env(xml_path, rank, seed=0, num_drones=1):
     def _init():
         env = CrazyflieEnv(
             xml_path=xml_path,
-            num_drones=num_drones
+            num_drones=num_drones,
+            max_curriculum_steps=TRAINING_CURRICULUM_STEPS
         )
         env.reset(seed=seed + rank)
         return env
@@ -41,7 +43,7 @@ def train_PPO(
     envs,
     total_steps: int,
     update_steps: int,
-    curriculum_steps: int = 1,
+    curriculum_steps: int = TRAINING_CURRICULUM_STEPS,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -182,7 +184,7 @@ if __name__ == "__main__":
         help="Before PPO training, bootstrap the model offline from manual control steps."
     )
     parser.add_argument("--num_envs", type=int, default=8, help="Number of parallel environments")
-    parser.add_argument("--total_steps", type=int, default=225_000, help="Total timesteps for training")
+    parser.add_argument("--total_steps", type=int, default=600_000, help="Total timesteps for training (per environment)")
     parser.add_argument("--update_steps", type=int, default=1500, help="Number of timesteps before policy updates")
     parser.add_argument("--device", type=str, default="cpu", help="Device for tensor computations")
     args = parser.parse_args()
@@ -220,9 +222,7 @@ if __name__ == "__main__":
             _, _, last_values = agent.sample_action(agent.buffer.observations[-1], deterministic=True)
             agent.update_policy(last_values)
     
-        # Train the agent with PPO with curriculum stages
-        curriculum_steps = 10
-        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps, curriculum_steps=curriculum_steps)
+        train_PPO(agent, envs, total_steps=args.total_steps, update_steps=args.update_steps)
     else:
         # Use provided model if present (as string), otherwise attempt to use default stored model
         if args.load_model is True:
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 2.5], dtype=np.float32),
+        target_pos=np.array([1.0, 1.0, 1.0], dtype=np.float32),
         max_steps=1500,
         random_initialization=False,
         debug=True
