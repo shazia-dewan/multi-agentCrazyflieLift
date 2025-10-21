@@ -187,7 +187,7 @@ class CrazyflieEnv(gym.Env):
 
                 start_x = self.np_random.normal(loc=self.target_pos[0], scale=std_pos)
                 start_y = self.np_random.normal(loc=self.target_pos[1], scale=std_pos)
-                start_z = self.np_random.normal(loc=self.target_pos[2], scale=std_pos)
+                start_z = max(self.np_random.normal(loc=self.target_pos[2], scale=std_pos), 0.1)
 
                 self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
                 self.data.qpos[base_qpos + 1] = start_y
