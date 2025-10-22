@@ -75,7 +75,7 @@ class CrazyflieEnv(gym.Env):
         self.observation_names = []
 
         # Define the observation space with n features based on how many we assign in _get_obs()
-        obs_high = np.inf * np.ones(158 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(153 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -84,7 +84,7 @@ class CrazyflieEnv(gym.Env):
         act_low = np.tile([0.0, -1, -1, -1], self.num_drones).astype(np.float32)
         self.action_space = spaces.Box(act_low, act_high, dtype=np.float32)
 
-        # Number of physics steps per call to step()
+        # Number of MuJoCo physics steps per call to env step()
         self.frame_skip = 10
 
         # Viewer
@@ -420,19 +420,19 @@ class CrazyflieEnv(gym.Env):
             # Positional engineered features
             # ---------------------------------------------------------------------
 
-            # Relative pos
-            pos_error = self.target_pos - pos
+            # Relative pos to target, normalized by initial distance (initial pos error magnitude)
+            pos_error = (self.target_pos - pos) / self.initial_distance_to_target
             obs.extend(self.add_feature_names(["pos_err_x", "pos_err_y", "pos_err_z"], pos_error))
 
-            distance_to_target = np.linalg.norm(pos_error)
-            squared_distance_to_target = distance_to_target ** 2
-            obs.extend(self.add_feature_names(["dist_to_target", "squared_dist_to_target"], np.array([distance_to_target, squared_distance_to_target], dtype=np.float32)))
+            distance_to_target = np.linalg.norm(self.target_pos - pos)
+            # squared_distance_to_target = distance_to_target ** 2
+            # obs.extend(self.add_feature_names(["dist_to_target", "squared_dist_to_target"], np.array([distance_to_target, squared_distance_to_target], dtype=np.float32)))
 
-            direction_to_target = pos_error / (distance_to_target + 1e-9)
+            direction_to_target = pos_error / (np.linalg.norm(pos_error) + 1e-9)
 
-            # normalize_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
-            normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
-            obs.extend(self.add_feature_names(["pos_norm_x", "pos_norm_y", "pos_norm_z"], normalized_pos))
+            # # normalized_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
+            # normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
+            # obs.extend(self.add_feature_names(["pos_norm_x", "pos_norm_y", "pos_norm_z"], normalized_pos))
 
             # 1st and 2nd derivative position error over one step ~ velocity and acceleration of error
             derivative_error = pos_error - self.prev_pos_error[i]
@@ -465,14 +465,12 @@ class CrazyflieEnv(gym.Env):
             ang_vel_over_dist = ang_vel / (distance_to_target + 1e-9)
             obs.extend(self.add_feature_names(["ang_vel_over_dist_x", "ang_vel_over_dist_y", "ang_vel_over_dist_z"], ang_vel_over_dist))
 
-
             vel_norm = vel / (np.linalg.norm(vel) + 1e-9)
             obs.extend(self.add_feature_names(["vel_norm_x", "vel_norm_y", "vel_norm_z"], vel_norm))
 
             vel_derivative = vel - self.prev_vel[i]
             obs.extend(self.add_feature_names(["derivative_vel_x", "derivative_vel_y", "derivative_vel_z"], vel_derivative))
             self.prev_vel[i] = vel.copy()
-
 
             ang_vel_norm = ang_vel / (np.linalg.norm(ang_vel) + 1e-9)
             obs.extend(self.add_feature_names(["ang_vel_norm_x", "ang_vel_norm_y", "ang_vel_norm_z"], ang_vel_norm))
