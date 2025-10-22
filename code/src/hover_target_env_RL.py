@@ -311,35 +311,8 @@ class CrazyflieEnv(gym.Env):
             # Reward/peanlty for distance to target (normalized by initial distance to target)
             proximity_bonus = 0.01 * (1 - np.tanh(distance_to_target))
             self.reward_tracker.update("proximity_bonus", proximity_bonus)
-
             
             reward = self.reward_tracker.step_total()
-
-            # # Penalize large rotation commands and deviation from previous action for smooth control
-            # large_rotation_cmd_penalty = -0.001 * (np.abs(ctrl_action[1]) + np.abs(ctrl_action[2]) + np.abs(ctrl_action[3]))
-            # self.reward_tracker.update("large_rotation_cmd_penalty", large_rotation_cmd_penalty)
-            # action_deviation_penalty = -0.005 * np.linalg.norm(ctrl_action - self.prev_control[i]) ** 2
-            # self.reward_tracker.update("action_deviation_penalty", action_deviation_penalty)
-
-            # # Penalize large rotations
-            # quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
-            # neutral_rotation = R.from_quat(np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32))
-            # relative_rotation = neutral_rotation.inv() * R.from_quat(quat_xyzw)
-            # rotation_error = -1 * relative_rotation.magnitude() ** 2
-            # self.reward_tracker.update("rotation_penalty", rotation_error)
-
-            # # Penalize high velocities for stable flight
-            # vel_penalty = -0.001 * np.dot(vel, vel)
-            # self.reward_tracker.update("velocity_penalty", vel_penalty)
-
-            # ang_vel_penalty = -0.005 * np.dot(ang_vel, ang_vel)
-            # self.reward_tracker.update("angular_velocity_penalty", ang_vel_penalty)
-
-            # # Large rotation, terminate with penalty
-            # if relative_rotation.magnitude() > 0.3:
-            #     self.reward_tracker.update("big_rotation", TERMINATION_PENALTY)
-            #     reward = self.reward_tracker.step_total()
-            #     terminated = True
 
             # Crash, terminate with penalty
             if pos[2] < 0.05 and self.timestep > 100:

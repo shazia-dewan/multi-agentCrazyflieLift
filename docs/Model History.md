@@ -71,3 +71,11 @@
   - 8 parallel envs, 600k timesteps, curriculum that progresses the range of random initial pos/rot/vel/ang_vel
 - Next steps:
   - Test some other reward metrics for stability such as rewarding low velocity, rotation, etc...
+
+**Model: xyz_hover**
+- xyz_hover model extended to work in *any* XYZ
+  - No curriculum to progress initial state ranges (e.g. pos), instead, sample from a distribution
+  - Modify features to prefer body coordinates (e.g. instead of world pos_error, use body frame pos_error)
+- Results
+  - Works well experimentally (14 tests for varying target positions in XYZ within ~5m)
+    - Not perfect (fails one out of 14 tests), perhaps due to insufficient training or unoptimized features, rewards...
