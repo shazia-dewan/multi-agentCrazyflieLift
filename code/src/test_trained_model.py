@@ -81,7 +81,7 @@ def main():
     target_positions = [
         # Z hover
         np.array([0.0, 0.0, 0.2], dtype=np.float32),
-        np.array([0.0, 0.0, 0.8], dtype=np.float32),
+        np.array([0.0, 0.0, 1.0], dtype=np.float32),
 
         # XZ hover
         np.array([1.0, 0.0, 0.5], dtype=np.float32),
@@ -94,17 +94,22 @@ def main():
         # XYZ hover close
         np.array([0.2, 0.2, 0.2], dtype=np.float32),
         np.array([-0.8, 0.5, 0.4], dtype=np.float32),
+        np.array([0.5, -0.8, 0.4], dtype=np.float32),
         np.array([1.0, 1.0, 1.0], dtype=np.float32),
 
         # XYZ hover medium
         np.array([0.5, 0.5, 2.0], dtype=np.float32),
-        np.array([2.0, 1.5, 1.0], dtype=np.float32),
         np.array([-1.5, 1.5, 1.5], dtype=np.float32),
+        np.array([1.5, -1.5, 1.5], dtype=np.float32),
+        np.array([2.0, 2.0, 1.0], dtype=np.float32),
 
         # XYZ hover far
         np.array([-2.5, 2.5, 2.5], dtype=np.float32),
+        np.array([2.5, -2.5, 2.5], dtype=np.float32),
+        np.array([3.0, 3.0, 0.5], dtype=np.float32),
         np.array([4.0, 4.0, 3.0], dtype=np.float32),
         np.array([7.0, -7.0, 2.5], dtype=np.float32),
+        np.array([-7.0, 7.0, 2.5], dtype=np.float32),
     ]
 
     results = []

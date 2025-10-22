@@ -75,7 +75,7 @@ class CrazyflieEnv(gym.Env):
         self.observation_names = []
 
         # Define the observation space with n features based on how many we assign in _get_obs()
-        obs_high = np.inf * np.ones(153 * self.num_drones, dtype=np.float32)
+        obs_high = np.inf * np.ones(146 * self.num_drones, dtype=np.float32)
         self.observation_space = spaces.Box(-obs_high, obs_high, dtype=np.float32)
 
         # Drone action space (see aicraft axes: https://en.wikipedia.org/wiki/Aircraft_principal_axes)
@@ -185,11 +185,11 @@ class CrazyflieEnv(gym.Env):
                 axis = self.np_random.normal(size=3)
                 axis /= np.linalg.norm(axis)
 
-                std_angle = TRAINING_QUAT_RANGE / 2
+                std_angle = TRAINING_QUAT_RANGE / 2.0
                 angle = self.np_random.normal(loc=0.0, scale=std_angle)
 
-                w = np.cos(angle / 2.0)
-                x, y, z = axis * np.sin(angle / 2.0)
+                w = np.cos(angle)
+                x, y, z = axis * np.sin(angle)
 
                 quat = np.array([w, x, y, z], dtype=np.float64)
                 self.data.qpos[base_qpos + 3: base_qpos + 7] = quat
@@ -478,22 +478,6 @@ class CrazyflieEnv(gym.Env):
             obs.extend(self.add_feature_names(["integral_rot_matrix_z0", "integral_rot_matrix_z1", "integral_rot_matrix_z2"], self.integral_rotation_matrix[i][2]))
             self.prev_rotation_matrix[i] = rotation_matrix.copy()
             
-            # Drone's body x and y axes in world frame
-            rotation_x_vector = rotation_matrix[:, 0]
-            rotation_x_vector /= (np.linalg.norm(rotation_x_vector) + 1e-9)
-            rotation_y_vector = rotation_matrix[:, 1]
-            rotation_y_vector /= (np.linalg.norm(rotation_y_vector) + 1e-9)
-
-            # Project velocity onto drone axes, how much is drone moving on roll (X) and pitch (Y) axes
-            vel_rotation_x = np.dot(vel, rotation_x_vector)
-            vel_rotation_y = np.dot(vel, rotation_y_vector)
-            obs.extend(self.add_feature_names(["vel_rotation_x", "vel_rotation_y"], np.array([vel_rotation_x, vel_rotation_y], dtype=np.float32)))
-
-            # Project pos_error onto drone axes, how is pos error moving on roll/pitch axes
-            pos_error_rotation_x = np.dot(pos_error, rotation_x_vector)
-            pos_error_rotation_y   = np.dot(pos_error, rotation_y_vector)
-            obs.extend(self.add_feature_names(["pos_error_rotation_x", "pos_error_rotation_y"], np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32)))
-
             # Direction to target in drone's local body coordinates
             obs.extend(self.add_feature_names(["dir_to_target_body_x", "dir_to_target_body_y", "dir_to_target_body_z"], direction_to_target))
             
@@ -511,22 +495,6 @@ class CrazyflieEnv(gym.Env):
             self.prev_direction_to_target_in_body[i] = direction_to_target
 
 
-            # Minimal rotation to align forward with target direction, drones forward axis is X (roll)
-            # rotation_error_vector is similar to direction_to_target_in_body, but encoded in a different way
-            if np.linalg.norm(direction_to_target) < 1e-8:
-                rotation_error_matrix = R.identity()
-                rotation_error_vector = np.zeros(3)
-            else:
-                rotation_error_matrix, _ = R.align_vectors([direction_to_target], [rotation_x_vector])
-                rotation_error_vector = rotation_error_matrix.as_rotvec()
-
-            obs.extend(self.add_feature_names(
-                ["rot_err_x", "rot_err_y", "rot_err_z"], 
-                rotation_error_vector
-            ))
-
-
-
             # ---------------------------------------------------------------------
             # Control (action) engineered features
             # ---------------------------------------------------------------------
@@ -536,8 +504,7 @@ class CrazyflieEnv(gym.Env):
             world_thrust /= (np.linalg.norm(world_thrust) + 1e-9)
             obs.extend(self.add_feature_names(["world_thrust_x", "world_thrust_y", "world_thrust_z"], world_thrust))
 
-            # Action History (last 16 normalized actions), flattened from (16, 4) to (64,)
-            # normalized_action_history = 2 * (self.action_history[i] / 0.35) - 1
+            # Action History, last n actions
             flattened_action_history = self.action_history[i].flatten()
             obs.extend(self.add_feature_names(
                 [f"ctrl_hist_{t}_{name}" for t in range(self.action_history_len) for name in ["thrust", "roll", "pitch", "yaw"]],
