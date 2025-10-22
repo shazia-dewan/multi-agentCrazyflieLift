@@ -404,9 +404,11 @@ class CrazyflieEnv(gym.Env):
             # Not used directly, we use relative pos
             pos = self.data.qpos[base_qpos: base_qpos + 3]
 
-            # quaternion[qw, qx, qy, qz,]
-            # Not using quat directly (can be ambiguous to nn), using rotation_matrix below
+            # quaternion[qw, qx, qy, qz]
+            # Not using quat (can be ambiguous to nn), using rotation_matrix instead (orientation in world coordinates)
             quat = self.data.qpos[base_qpos + 3 : base_qpos + 7]
+            quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
+            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
 
             # velocity[vx, vy, vz]
             vel = self.data.qvel[base_qvel: base_qvel + 3]
@@ -420,19 +422,10 @@ class CrazyflieEnv(gym.Env):
             # Positional engineered features
             # ---------------------------------------------------------------------
 
-            # Relative pos to target, normalized by initial distance (initial pos error magnitude)
+            # Relative pos to target in body coordinates, normalized by initial distance (initial pos error magnitude)
             pos_error = (self.target_pos - pos) / self.initial_distance_to_target
+            pos_error = rotation_matrix.T @ pos_error
             obs.extend(self.add_feature_names(["pos_err_x", "pos_err_y", "pos_err_z"], pos_error))
-
-            distance_to_target = np.linalg.norm(self.target_pos - pos)
-            # squared_distance_to_target = distance_to_target ** 2
-            # obs.extend(self.add_feature_names(["dist_to_target", "squared_dist_to_target"], np.array([distance_to_target, squared_distance_to_target], dtype=np.float32)))
-
-            direction_to_target = pos_error / (np.linalg.norm(pos_error) + 1e-9)
-
-            # # normalized_pos stores [x, y, z] normalized by the l2 (euclidean) norm of target
-            # normalized_pos = 2 * pos / (np.linalg.norm(self.target_pos) + 1e-9) - 1
-            # obs.extend(self.add_feature_names(["pos_norm_x", "pos_norm_y", "pos_norm_z"], normalized_pos))
 
             # 1st and 2nd derivative position error over one step ~ velocity and acceleration of error
             derivative_error = pos_error - self.prev_pos_error[i]
@@ -448,6 +441,9 @@ class CrazyflieEnv(gym.Env):
             self.prev_pos_error[i] = pos_error.copy()
             self.derivative_prev_pos_error[i] = derivative_error.copy()
 
+            # Some positional attributes used below
+            distance_to_target = np.linalg.norm(self.target_pos - pos)
+            direction_to_target = pos_error / (np.linalg.norm(pos_error) + 1e-9)
 
             # ---------------------------------------------------------------------
             # Velocity (base and angular) engineered features
@@ -493,9 +489,7 @@ class CrazyflieEnv(gym.Env):
             # Rotational engineered features
             # ---------------------------------------------------------------------
 
-            # From quaternion -> rotation matrix (get orientation of drone in world coordinates)
-            quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
-            rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
+            # Rotation matrix from quaternion
             obs.extend(self.add_feature_names(["rot_matrix_x0", "rot_matrix_x1", "rot_matrix_x2"], rotation_matrix[0]))
             obs.extend(self.add_feature_names(["rot_matrix_y0", "rot_matrix_y1", "rot_matrix_y2"], rotation_matrix[1]))
             obs.extend(self.add_feature_names(["rot_matrix_z0", "rot_matrix_z1", "rot_matrix_z2"], rotation_matrix[2]))
