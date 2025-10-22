@@ -14,8 +14,6 @@ from PPO_agent import PPOAgentVec
 from hover_target_env_RL import CrazyflieEnv
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
-TRAINING_CURRICULUM_STEPS = 10
-
 ####################################
 # Env factory for parallelism
 ####################################
@@ -28,7 +26,6 @@ def make_env(xml_path, rank, seed=0, num_drones=1):
         env = CrazyflieEnv(
             xml_path=xml_path,
             num_drones=num_drones,
-            max_curriculum_steps=TRAINING_CURRICULUM_STEPS
         )
         env.reset(seed=seed + rank)
         return env
@@ -43,7 +40,6 @@ def train_PPO(
     envs,
     total_steps: int,
     update_steps: int,
-    curriculum_steps: int = TRAINING_CURRICULUM_STEPS,
     print_logs: bool = True,
     save_model: bool = True
 ):
@@ -74,13 +70,10 @@ def train_PPO(
     episode_returns = np.zeros(num_envs)
     completed_episode_returns = []
 
-    curriculum_step = 1
-    updates_before_curriculum = num_updates // curriculum_steps
-
     for update in range(num_updates):
-        for _ in range(update_steps):
-            completed_episode_returns.clear()
+        completed_episode_returns.clear()
 
+        for _ in range(update_steps):
             actions, log_probs, values = agent.sample_action(obs)
             next_obs, rewards, dones, infos = envs.step(actions)
 
@@ -115,12 +108,6 @@ def train_PPO(
         for optimizer in [agent.policy_optimizer, agent.value_optimizer]:
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr_now
-
-        # Update the curriculum if we have reached the required number of updates
-        if curriculum_steps > 1 and (update + 1) % updates_before_curriculum == 0 and (curriculum_step < curriculum_steps):
-            curriculum_step += 1
-            envs.env_method("update_curriculum", curriculum_step)
-            print(f"\nCurriculum step {curriculum_step}/{curriculum_steps} reached, updated training environment\n")
 
     if save_model:
         agent.save(MODEL_SAVE_PATH)
@@ -241,7 +228,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        target_pos=np.array([4.0, 4.0, 1.0], dtype=np.float32),
         max_steps=1500,
         random_initialization=False,
         debug=True
