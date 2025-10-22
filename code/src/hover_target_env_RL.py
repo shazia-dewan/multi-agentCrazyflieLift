@@ -410,8 +410,8 @@ class CrazyflieEnv(gym.Env):
             quat_xyzw = np.roll(quat, -1) # SciPy expects [x, y, z, w], so reorder
             rotation_matrix = R.from_quat(quat_xyzw).as_matrix()
 
-            # velocity[vx, vy, vz]
-            vel = self.data.qvel[base_qvel: base_qvel + 3]
+            # velocity[vx, vy, vz] in body frame
+            vel = rotation_matrix.T @ self.data.qvel[base_qvel: base_qvel + 3]
             obs.extend(self.add_feature_names(["vel_x", "vel_y", "vel_z"], vel))
 
             # angular velocity[wx, wy, wz]
@@ -522,21 +522,20 @@ class CrazyflieEnv(gym.Env):
             obs.extend(self.add_feature_names(["pos_error_rotation_x", "pos_error_rotation_y"], np.array([pos_error_rotation_x, pos_error_rotation_y], dtype=np.float32)))
 
             # Direction to target in drone's local body coordinates
-            direction_to_target_in_body = rotation_matrix.T @ direction_to_target
-            obs.extend(self.add_feature_names(["dir_to_target_body_x", "dir_to_target_body_y", "dir_to_target_body_z"], direction_to_target_in_body))
+            obs.extend(self.add_feature_names(["dir_to_target_body_x", "dir_to_target_body_y", "dir_to_target_body_z"], direction_to_target))
             
-            derivative_direction_to_target_in_body = direction_to_target_in_body - self.prev_direction_to_target_in_body[i]
+            derivative_direction_to_target_in_body = direction_to_target - self.prev_direction_to_target_in_body[i]
             obs.extend(self.add_feature_names(
                 ["derivative_dir_to_target_body_x", "derivative_dir_to_target_body_y", "derivative_dir_to_target_body_z"],
                 derivative_direction_to_target_in_body
             ))
             
-            self.integral_direction_to_target_in_body[i] = 0.95 * self.integral_direction_to_target_in_body[i] + 0.05 * direction_to_target_in_body
+            self.integral_direction_to_target_in_body[i] = 0.95 * self.integral_direction_to_target_in_body[i] + 0.05 * direction_to_target
             obs.extend(self.add_feature_names(
                 ["integral_dir_to_target_body_x", "integral_dir_to_target_body_y", "integral_dir_to_target_body_z"], 
                 self.integral_direction_to_target_in_body[i]
             ))
-            self.prev_direction_to_target_in_body[i] = direction_to_target_in_body
+            self.prev_direction_to_target_in_body[i] = direction_to_target
 
 
             # Minimal rotation to align forward with target direction, drones forward axis is X (roll)
