@@ -80,3 +80,16 @@
 - Results
   - Works well experimentally (14 tests for varying target positions in XYZ within ~5m)
     - Not perfect (fails one out of 14 tests), perhaps due to insufficient training or unoptimized features, rewards...
+
+# Step 5: Multi-Agent Coordination
+
+**Model: multi_xyz_hover**
+- xyz_hover with two drones using multi-agent PPO (MAPPO)
+  - MAPPO: Centralized Critic (sees all drone states, computes one reward per step) Decentralized Execution (drone's only see their own state)
+- Using separate agent (MAPPO agent) but same environment with minor changes
+  - Adapted for MARL --> E.g. iterate over each drone, compute observations, action, per-drone rewards (later summed for total step reward)
+  - New rewards/penalties
+    - Penalty for proximity to other drones and penalty for collision with other drone
+- Results (24 envs, 600k steps per env)
+  - Semi-successful XYZ hover, tested against ~20 targets, achieved semi-successful hover on ~15
+    - Drones have learned to hover around target while avoiding one another reasonable well, but still sometimes crash/fail

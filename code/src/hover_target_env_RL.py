@@ -161,9 +161,12 @@ class CrazyflieEnv(gym.Env):
         self.action_history_len = 16
         self.action_history = np.zeros((self.num_drones, self.action_history_len, self.ctrl_per_drone), dtype=np.float32)
         
-        # If using multiple drones, offset them along X axis to avoid starting collisions
-        drone_spacing_x = 0.4
-        drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
+        # If using multiple drones, offset them along a random direction in XY plane during training
+        drone_spacing = 0.4
+        drone_offsets = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing
+        theta = self.np_random.uniform(0, 2 * np.pi)
+        dir_x = np.cos(theta)
+        dir_y = np.sin(theta)
 
         if self.random_initialization:
             for i in range(self.num_drones):
@@ -177,8 +180,8 @@ class CrazyflieEnv(gym.Env):
                 start_y = self.np_random.normal(loc=self.target_pos[1], scale=std_pos)
                 start_z = max(self.np_random.normal(loc=self.target_pos[2], scale=std_pos), 0.1)
 
-                self.data.qpos[base_qpos + 0] = start_x + drone_offsets_x[i]
-                self.data.qpos[base_qpos + 1] = start_y
+                self.data.qpos[base_qpos + 0] = start_x + drone_offsets[i] * dir_x
+                self.data.qpos[base_qpos + 1] = start_y + drone_offsets[i] * dir_y
                 self.data.qpos[base_qpos + 2] = start_z
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
@@ -211,16 +214,17 @@ class CrazyflieEnv(gym.Env):
                 ang_vel_z = self.np_random.normal(loc=0.0, scale=std_ang_vel)
                 self.data.qvel[base_qvel + 3: base_qvel + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
         else:
-            # In non-training (eval) run, start drone(s) on the floor
+            # In non-training (eval) run, start drone(s) on the floor (lined up on X axis for multiple)
             for i in range(self.num_drones):
                 base_qpos = i * self.qpos_per_drone
-                self.data.qpos[base_qpos + 0] = drone_offsets_x[i]
+                self.data.qpos[base_qpos + 0] = drone_offsets[i]
                 self.data.qpos[base_qpos + 1] = 0
                 self.data.qpos[base_qpos + 2] = 0.03
 
                 self.prev_pos[i] = self.data.qpos[base_qpos : base_qpos + 3]
 
         # Store initial state and starting pos
+        self.initial_distance_to_target = np.zeros(self.num_drones, dtype=np.float32)
         for i in range(self.num_drones):
             base_qpos = i * self.qpos_per_drone
             base_qvel = i * self.qvel_per_drone
@@ -233,7 +237,7 @@ class CrazyflieEnv(gym.Env):
             ])
 
             self.starting_pos[i] = self.data.qpos[base_qpos : base_qpos + 3].copy()
-            self.initial_distance_to_target = np.linalg.norm(self.target_pos - self.starting_pos[i])
+            self.initial_distance_to_target[i] = np.linalg.norm(self.target_pos - self.starting_pos[i])
 
             # Start at neutral control
             self.prev_control[i] = np.array([BASE_HOVER_THRUST, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -272,8 +276,9 @@ class CrazyflieEnv(gym.Env):
         terminated = False
         truncated = False
 
-        # Fill control array
+        # Control and reward arrays
         ctrl = np.zeros(self.num_drones * self.ctrl_per_drone, dtype=np.float32)
+        drone_rewards = np.zeros(self.num_drones, dtype=np.float32)
 
         # Extract all drone positions for later proximity calculations
         drone_positions = np.zeros((self.num_drones, 3), dtype=np.float32)
@@ -282,6 +287,7 @@ class CrazyflieEnv(gym.Env):
             pos = self.data.qpos[base_qpos: base_qpos + 3]
             drone_positions[i] = pos
 
+        # Action, rewards, termination...
         for i in range(self.num_drones):
             base_qpos = i * self.qpos_per_drone
             base_qvel = i * self.qvel_per_drone
@@ -326,21 +332,7 @@ class CrazyflieEnv(gym.Env):
             proximity_bonus = 0.01 * (1 - np.tanh(distance_to_target))
             self.reward_tracker.update("proximity_bonus", proximity_bonus)
             
-            reward = self.reward_tracker.step_total()
-
-            # Crash, terminate with penalty
-            if pos[2] < 0.05 and self.timestep > 100:
-                self.reward_tracker.update("crash", TERMINATION_PENALTY)
-                reward = self.reward_tracker.step_total()
-                terminated = True
-
-            # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
-            if distance_to_target > self.initial_distance_to_target + OUT_OF_BOUNDS_RANGE:
-                self.reward_tracker.update("out_of_bounds", TERMINATION_PENALTY)
-                reward = self.reward_tracker.step_total()
-                terminated = True
-            
-            # MARL checks: penalize proximity to other drone(s), terminate if we collide
+            # MARL rewards: penalize proximity to other drone(s), terminate if we collide
             min_distance_to_other = np.inf
             for j in range(self.num_drones):
                 if j == i:
@@ -350,13 +342,28 @@ class CrazyflieEnv(gym.Env):
 
                 # Too close
                 if distance_to_drone < DRONE_PROXIMITY_THRESHOLD:
-                    penalty = -0.01 * (1.0 - distance_to_drone / DRONE_PROXIMITY_THRESHOLD)
-                    self.reward_tracker.update(f"proximity_penalty_{j}", penalty)
+                    penalty = -0.1 * (1.0 - distance_to_drone / DRONE_PROXIMITY_THRESHOLD)
+                    self.reward_tracker.update(f"drone_proximity_penalty", penalty)
+                else:
+                    self.reward_tracker.update(f"drone_proximity_penalty", 0.0)
 
                 # Collision
                 if distance_to_drone < DRONE_COLLISION_THRESHOLD:
-                    self.reward_tracker.update(f"collision_{j}", TERMINATION_PENALTY)
+                    self.reward_tracker.update(f"drone_collision", TERMINATION_PENALTY)
                     terminated = True
+
+            # Crash, terminate with penalty
+            if pos[2] < 0.05 and self.timestep > 100:
+                self.reward_tracker.update("crash", TERMINATION_PENALTY)
+                terminated = True
+
+            # Out of bounds, terminate with penalty (if we go much further from the target compared to starting pos)
+            if distance_to_target > self.initial_distance_to_target[i] + OUT_OF_BOUNDS_RANGE:
+                self.reward_tracker.update("out_of_bounds", TERMINATION_PENALTY)
+                terminated = True
+
+            # Track this drone's rewards --> Will sum all drone rewards for total step return
+            drone_rewards[i] = self.reward_tracker.step_total()
 
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps
@@ -366,7 +373,10 @@ class CrazyflieEnv(gym.Env):
             self.prev_control[i] = ctrl_action.copy()
 
             if self.debug:
-                print(f"Step {self.timestep} - Ctrl: {[f'{c:.4f}' for c in ctrl]}, Position: {[f'{p:.2f}' for p in pos]}, Reward: {reward:.4f}")
+                print(f"Step {self.timestep} Drone {i + 1} - Ctrl: {[f'{c:.4f}' for c in ctrl_action]}, Pos: {[f'{p:.2f}' for p in pos]}, Reward: {drone_rewards[i]:.4f}")
+
+        # Compute sum rewards across all agent(s)
+        rewards = np.sum(drone_rewards)
         
         # Apply control
         self.data.ctrl[:] = ctrl
@@ -383,7 +393,8 @@ class CrazyflieEnv(gym.Env):
             "terminated": terminated,
             "truncated": truncated
         }
-        return obs, reward, terminated, truncated, info
+        return obs, rewards, terminated, truncated, info
+
 
 
     def _get_obs(self) -> np.ndarray:
@@ -428,7 +439,7 @@ class CrazyflieEnv(gym.Env):
             # ---------------------------------------------------------------------
 
             # Relative pos to target in body coordinates, normalized by initial distance (initial pos error magnitude)
-            pos_error = (self.target_pos - pos) / self.initial_distance_to_target
+            pos_error = (self.target_pos - pos) / self.initial_distance_to_target[i]
             pos_error = rotation_matrix.T @ pos_error
             obs.extend(self.add_feature_names(["pos_err_x", "pos_err_y", "pos_err_z"], pos_error))
 

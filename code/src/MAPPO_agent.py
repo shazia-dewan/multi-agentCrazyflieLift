@@ -6,14 +6,6 @@ import numpy as np
 
 from neural_network import PolicyNetwork, ValueNetwork
 
-# Some context: See Parallel Environments.md
-# <TENSOR>.cpu() restore the info in CPU memory (helpful if using GPU)
-#   If using NVIDIA GPU e.g. device="cuda", install PyTorch with cuda support (see Usage.md)
-# Current setup is suboptimal for full GPU computations (e.g. lots of conversion to CPU storage)
-#   For larger batches or networks, perhaps store rollout buffer directly as torch tensors on GPU
-#   Only call .cpu().numpy() before env.step
-#   Stepping might still be the bottleneck via CPU
-
 class RolloutBufferMAPPO:
     """
     Multi-agent rollout buffer for PPO, similar to single-agent RolloutBuffer but adapted for multiple agents.
@@ -42,7 +34,7 @@ class RolloutBufferMAPPO:
 
         observations: (num_envs, obs_dim_total)
         actions: (num_envs, action_dim_total)
-        rewards: (num_envs,) or (num_envs, num_agents)
+        rewards: (num_envs,)
         terminateds: (num_envs,)
         log_probs: (num_envs, num_agents)
         values: (num_envs,)
@@ -239,212 +231,187 @@ class MAPPOAgent:
 
     def _compute_gae(self, last_values: np.ndarray | None = None, lamda: float = 0.95):
         """
-        Compute GAE advantages and returns for multi-agent PPO (similar to PPO_agent.py but adapted for multi-agent data).
-        If rewards are (num_envs, num_agents), the same advantage per env
-        is applied to all agents (centralized value function).
+        Compute GAE advantages and returns for multi-agent PPO, identical to the PPO implementation in PPO_agent.py
         """
         T = self.buffer.num_steps()
         num_envs = self.buffer.num_envs()
+
+        # Empty buffer
         if T == 0:
             return np.array([]), np.array([])
 
-        # Get reward and value shapes
-        rewards_0 = np.asarray(self.buffer.rewards[0])
-        multi_agent = rewards_0.ndim == 2
-        num_agents = rewards_0.shape[1] if multi_agent else 1
-
-        # Bootstrap value for truncations
+        # Initialize values for bootstrapping truncated episodes (or actual values for terminated episodes)
         if last_values is None:
             next_values = np.zeros(num_envs, dtype=np.float32)
         else:
             next_values = np.asarray(last_values).reshape(-1).astype(np.float32)
 
-        advantages, returns = [None] * T, [None] * T
+        advantages = [None] * T
+        returns = [None] * T
+
+        # Running advantage buffer (GAE)
         gae = np.zeros(num_envs, dtype=np.float32)
 
+        # Iterate backward through trajectory, populate per-timestep advantages and returns
         for t in reversed(range(T)):
-            rewards_t = np.asarray(self.buffer.rewards[t], dtype=np.float32)
-            if not multi_agent:
-                rewards_t = rewards_t.reshape(num_envs, 1)  # unify shape (num_envs, num_agents)
-            state_values_t = np.asarray(self.buffer.state_values[t]).reshape(num_envs).astype(np.float32)
-            terminateds_t = np.asarray(self.buffer.terminateds[t]).reshape(num_envs).astype(np.float32)
+            # Sample rewards, state values, and end conditions at time t and flatten to shape (num_envs,)
+            rewards_t = np.asarray(self.buffer.rewards[t]).reshape(-1).astype(np.float32)
+            state_values_t = np.asarray(self.buffer.state_values[t]).reshape(-1).astype(np.float32)
+            terminateds_t = np.asarray(self.buffer.terminateds[t]).reshape(-1).astype(np.float32)
 
-            # TD residual (delta)
-            reward_delta = rewards_t.mean(axis=1) + self.gamma * next_values * (1.0 - terminateds_t) - state_values_t
+            # Bootstrap with critic if the episode is not terminal
+            reward_delta = rewards_t + self.gamma * next_values * (1.0 - terminateds_t) - state_values_t
 
+            # Update running advantage estimate, for terminal episodes, gae = reward_delta
             gae = reward_delta + self.gamma * lamda * (1.0 - terminateds_t) * gae
 
-            # For multi-agent, replicate the same env-level advantage to all agents
-            adv_per_agent = np.repeat(gae[:, None], num_agents, axis=1)
-            ret_per_agent = np.repeat((gae + state_values_t)[:, None], num_agents, axis=1)
+            advantages[t] = gae.copy()
+            returns[t] = (advantages[t] + state_values_t).copy()
 
-            advantages[t] = adv_per_agent
-            returns[t] = ret_per_agent
-
+            # Prepare next value (shift one step back in time for propagation)
             next_values = state_values_t
 
-        advantages_flat = np.concatenate([a.reshape(-1, num_agents) for a in advantages], axis=0)
-        returns_flat = np.concatenate([r.reshape(-1, num_agents) for r in returns], axis=0)
+        # Flatten in time-major order
+        advantages_flat = np.concatenate([a.reshape(-1,) for a in advantages], axis=0)
+        returns_flat = np.concatenate([r.reshape(-1,) for r in returns], axis=0)
 
         return advantages_flat, returns_flat
 
 
     def _flatten_buffer(self, last_values: np.ndarray | None=None):
-        """
-        Flatten rollout buffer into tensors for PPO updates.
-        Works for multi-agent data: (T, num_envs, num_agents, ...) → (T * num_envs * num_agents, ...)
-        """
         T = self.buffer.num_steps()
         if T == 0:
             return None
         num_envs = self.buffer.num_envs()
 
-        obs = np.array(self.buffer.observations)
-        acts = np.array(self.buffer.actions)
-        logps = torch.stack(self.buffer.log_probs)
-
-        num_agents = logps.shape[-1] if logps.ndim == 3 else 1
+        obs = np.array(self.buffer.observations)   # (T, num_envs, full_obs_dim)
+        acts = np.array(self.buffer.actions)       # (T, num_envs, full_action_dim)
+        logps = torch.stack(self.buffer.log_probs) # (T, num_envs, num_agents)
         device = self.device
 
-        # Compute returns and advantages per-env
-        advantages, returns = self._compute_gae(last_values)
+        # Compute env-level returns and advantages (shape (T*num_envs,))
+        advantages_env, returns_env = self._compute_gae(last_values)
 
-        # Flatten (env, agent) → one batch
-        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device)
-        acts_t = torch.as_tensor(acts, dtype=torch.float32, device=device)
+        # Convert to tensors
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=device)    # (T, num_envs, full_obs_dim)
+        acts_t = torch.as_tensor(acts, dtype=torch.float32, device=device)  # (T, num_envs, full_action_dim)
+        logp_t = logps.to(device)                                           # (T, num_envs, num_agents)
 
-        # Repeat advantages and returns for each agent if multi-agent
-        adv_t = torch.as_tensor(advantages, dtype=torch.float32, device=device).repeat(1, num_agents)
-        ret_t = torch.as_tensor(returns, dtype=torch.float32, device=device).repeat(1, num_agents)
+        # Full obs flat for value net training: shape (T*num_envs, full_obs_dim)
+        full_obs_flat = obs_t.reshape(-1, obs_t.shape[-1])
 
-        logp_t = logps.to(device)
+        # env-level advantages/returns as tensors (T*num_envs,)
+        adv_env_t = torch.as_tensor(advantages_env, dtype=torch.float32, device=device)
+        ret_env_t = torch.as_tensor(returns_env, dtype=torch.float32, device=device)
 
-        # If multi-agent, repeat obs for each agent
-        if num_agents > 1:
-            obs_t = obs_t.repeat_interleave(num_agents, dim=1)  # (T, num_envs * num_agents, obs_dim)
-            acts_t = acts_t.repeat_interleave(num_agents, dim=1)
-            adv_t = adv_t.view(T, num_envs * num_agents)
-            ret_t = ret_t.view(T, num_envs * num_agents)
-            logp_t = logp_t.view(T, num_envs * num_agents)
-        else:
-            obs_t = obs_t
-            acts_t = acts_t
-            adv_t = adv_t.view(T * num_envs)
-            ret_t = ret_t.view(T * num_envs)
-            logp_t = logp_t.view(T * num_envs)
-
-        # Final flattening over time
-        return (
-            obs_t.reshape(-1, obs_t.shape[-1]),
-            acts_t.reshape(-1, acts_t.shape[-1]),
-            adv_t.reshape(-1),
-            ret_t.reshape(-1),
-            logp_t.reshape(-1),
-        )
+        return {
+            "obs": obs_t,                   # (T, num_envs, full_obs_dim)
+            "acts": acts_t,                 # (T, num_envs, full_action_dim)
+            "logps": logp_t,                # (T, num_envs, num_agents)
+            "adv_env": adv_env_t,           # (T*num_envs,)
+            "ret_env": ret_env_t,           # (T*num_envs,)
+            "full_obs_flat": full_obs_flat, # (T*num_envs, full_obs_dim)
+            "T": T,
+            "num_envs": num_envs
+        }
 
 
     def update_policy(self, last_values: np.ndarray | None = None) -> None:
-        """
-        Update policy and value networks using PPO-Clip for multiple drones.
-        Each drone is updated separately using slices of the flattened rollout buffer.
-        Value network uses full centralized observations.
-        """
-        # Flatten the buffer, retrieve tensors
-        flattened = self._flatten_buffer(last_values)
-        if flattened is None:
+        data = self._flatten_buffer(last_values)
+        if data is None:
             print("Buffer empty: nothing to update.")
             return
 
-        observations, actions, advantages, returns, old_log_probs = flattened
-        T = self.buffer.num_steps()
-        num_envs = self.buffer.num_envs()
+        obs_t = data["obs"]
+        acts_t = data["acts"]
+        logp_t = data["logps"]
+        adv_env = data["adv_env"]    # (T*num_envs,)
+        ret_env = data["ret_env"]    # (T*num_envs,)
+        full_obs_flat = data["full_obs_flat"]
+        T = data["T"]
+        num_envs = data["num_envs"]
         num_agents = self.num_drones
-        obs_dim = observations.shape[-1]
-        action_dim = actions.shape[-1]
 
-        # Normalize advantages globally
-        advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-9)
-        advantages = advantages.detach()
+        obs_per_agent = self.obs_dim // num_agents
+        act_per_agent = self.action_dim // num_agents
 
-        # Reshape flattened data to [T, num_envs, num_agents, ...]
-        obs_reshaped = observations.view(T, num_envs, num_agents, obs_dim)
-        acts_reshaped = actions.view(T, num_envs, num_agents, action_dim)
-        adv_reshaped = advantages.view(T, num_envs, num_agents)
-        ret_reshaped = returns.view(T, num_envs, num_agents)
-        logp_reshaped = old_log_probs.view(T, num_envs, num_agents)
+        # Normalize env-level advantages
+        adv_env = (adv_env - adv_env.mean()) / (adv_env.std(unbiased=False) + 1e-9)
 
-        # Total transitions per agent
-        N = T * num_envs
+        # Reshape for per-agent access:
+        # obs_t: (T, num_envs, full_obs_dim) -> reshape last dim to (num_agents, obs_per_agent)
+        obs_per_agent_t = obs_t.reshape(T, num_envs, num_agents, obs_per_agent)   # (T, num_envs, num_agents, obs_per_agent)
+        acts_per_agent_t = acts_t.reshape(T, num_envs, num_agents, act_per_agent) # (T, num_envs, num_agents, act_per_agent)
+        logp_t = logp_t  # (T, num_envs, num_agents)
+
+        # Apply the same (centralized) adv and return to each agent
+        adv_per_agent = adv_env.view(T, num_envs).unsqueeze(-1).repeat(1, 1, num_agents)  # (T, num_envs, num_agents)
+        ret_per_agent = ret_env.view(T, num_envs).unsqueeze(-1).repeat(1, 1, num_agents)
+
+        N = T * num_envs  # transitions per agent
         num_minibatches = min(self.num_minibatches, N)
         batch_size = max(N // num_minibatches, 1)
 
-        # Flatten full obs for value network (centralized)
-        full_obs_flat = obs_reshaped.reshape(-1, obs_dim)  # shape [T*num_envs*num_agents, obs_dim]
-
         for agent_idx in range(num_agents):
-            # Slice per-agent observations and actions
-            agent_obs = obs_reshaped[:, :, agent_idx, :].reshape(-1, obs_dim // num_agents)
-            agent_acts = acts_reshaped[:, :, agent_idx, :].reshape(-1, action_dim // num_agents)
-            agent_adv = adv_reshaped[:, :, agent_idx].reshape(-1)
-            agent_ret = ret_reshaped[:, :, agent_idx].reshape(-1)
-            agent_old_logp = logp_reshaped[:, :, agent_idx].reshape(-1)
+            # Flatten per-agent arrays to length N
+            agent_obs = obs_per_agent_t[:, :, agent_idx, :].reshape(-1, obs_per_agent)   # (N, obs_per_agent)
+            agent_acts = acts_per_agent_t[:, :, agent_idx, :].reshape(-1, act_per_agent) # (N, act_per_agent)
+            agent_adv = adv_per_agent[:, :, agent_idx].reshape(-1)  # (N,)
+            agent_ret = ret_per_agent[:, :, agent_idx].reshape(-1)  # (N,)
+            agent_old_logp = logp_t[:, :, agent_idx].reshape(-1).to(self.device) # (N,)
 
             for _ in range(self.update_epochs):
-                permutation = torch.randperm(N, device=self.device)
+                perm = torch.randperm(N, device=self.device)
 
-                # Compute old mean/std once for KL check
+                # Compute old mean/std once for KL
                 with torch.no_grad():
                     mean_old, std_old = self.policy_network(agent_obs)
 
                 for start in range(0, N, batch_size):
                     end = min(start + batch_size, N)
-                    batch_idx = permutation[start:end]
+                    idx = perm[start:end]
 
-                    obs_batch = agent_obs[batch_idx]
-                    acts_batch = agent_acts[batch_idx]
-                    adv_batch = agent_adv[batch_idx]
-                    ret_batch = agent_ret[batch_idx]
-                    old_logp_batch = agent_old_logp[batch_idx]
+                    obs_batch = agent_obs[idx]
+                    acts_batch = agent_acts[idx]
+                    adv_batch = agent_adv[idx]
+                    ret_batch = agent_ret[idx]
+                    old_logp_batch = agent_old_logp[idx]
 
-                    # Policy forward pass
                     mean, std = self.policy_network(obs_batch)
                     dist = Normal(mean, std)
                     log_probs = dist.log_prob(acts_batch).sum(dim=-1)
 
-                    # KL divergence check
-                    dist_old = Normal(mean_old[batch_idx].detach(), std_old[batch_idx].detach())
-                    kl_mean = torch.distributions.kl_divergence(dist_old, dist).sum(dim=-1).mean()
-                    if kl_mean > self.kl_threshold:
-                        print(f"\nEarly stopping due to KL divergence: {kl_mean.item():.4f} > {self.kl_threshold}\n")
+                    # KL check
+                    dist_old = Normal(mean_old[idx].detach(), std_old[idx].detach())
+                    kl = torch.distributions.kl_divergence(dist_old, dist).sum(dim=-1).mean()
+                    if kl > self.kl_threshold:
+                        print(f"Early stopping due to KL {kl.item():.4f} > {self.kl_threshold}")
                         break
 
-                    # PPO clipped objective
                     ratio = torch.exp(log_probs - old_logp_batch)
-                    unclipped_objective = ratio * adv_batch
-                    clipped_objective = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_batch
-                    policy_loss = -(torch.min(unclipped_objective, clipped_objective).mean() +
-                                    self.entropy_coefficient * dist.entropy().sum(dim=-1).mean())
+                    unclipped = ratio * adv_batch
+                    clipped = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_batch
+                    policy_loss = -(torch.min(unclipped, clipped).mean() + self.entropy_coefficient * dist.entropy().sum(dim=-1).mean())
 
-                    # Value loss (centralized obs)
-                    obs_value_batch = full_obs_flat[batch_idx]  # full obs for all agents
+                    # Value loss uses centralized observation and env-level returns
+                    obs_value_batch = full_obs_flat[idx]   # (batch, full_obs_dim)
                     pred_values = self.value_network(obs_value_batch).view(-1)
                     value_loss = self.value_loss_coefficient * nn.MSELoss()(pred_values, ret_batch)
 
-                    # Policy optimizer step
+                    # Update policy
                     self.policy_optimizer.zero_grad()
                     policy_loss.backward()
                     nn.utils.clip_grad_norm_(self.policy_network.parameters(), max_norm=0.5)
                     self.policy_optimizer.step()
 
-                    # Value optimizer step
+                    # Update value
                     self.value_optimizer.zero_grad()
                     value_loss.backward()
                     nn.utils.clip_grad_norm_(self.value_network.parameters(), max_norm=0.5)
                     self.value_optimizer.step()
 
-        # Clear buffer after update
+        # Clear buffer
         self.buffer.clear()
-
 
 
     def get_obs_importance(self, action_idx: int | None = None) -> dict:
