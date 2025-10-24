@@ -4,6 +4,7 @@
 #       Subsequently, better understand how to shape features and rewards for RL task.
 #   2. Save manual data to potentially train the PPO agent via imitation
 
+import argparse
 import datetime
 import os
 import time
@@ -14,15 +15,12 @@ import mujoco.viewer
 from pynput import keyboard
 import pickle
 
-from constants import SCENE_PATH
+from constants import SCENE_PATH, MULTI_SCENE_PATH
 from hover_target_env_RL import CrazyflieEnv
 from PPO_agent import PPOAgentVec
 
 # Store manual step info (obs, action, reward, done) so it can be used to train the agent by imitation
 step_data = []
-
-# [thrust, roll, pitch, yaw], start at base hover
-action = np.array([0.26487, 0.0, 0.0, 0.0], dtype=np.float32)
 
 # Step increments for controls
 THRUST_STEP = 0.001
@@ -130,13 +128,30 @@ def load_manual_steps(agent: PPOAgentVec, manual_steps_dir: str) -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run a manual control simulation of drone(s) in MuJoCo.")
+    parser.add_argument(
+        "--num_drones",
+        type=int,
+        default=1,
+        help="Number of drones in the environment. If > 1, apply manual control to all drones."
+    )
+    args = parser.parse_args()
+
     start_x = np.random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
     start_y = np.random.uniform(-TRAINING_POS_RANGE / 2, TRAINING_POS_RANGE / 2)
     start_z = np.random.uniform(0.5, TRAINING_POS_RANGE)
 
+    single_action = np.array([0.26487, 0.0, 0.0, 0.0], dtype=np.float32)
+    if args.num_drones > 1:
+        scene = MULTI_SCENE_PATH
+        action = np.tile(single_action, args.num_drones)
+    else:
+        scene = SCENE_PATH
+        action = single_action
+
     env = CrazyflieEnv(
-        xml_path=SCENE_PATH,
-        num_drones=1,
+        xml_path=scene,
+        num_drones=args.num_drones,
         target_pos=np.array([0.0, start_y, start_z], dtype=np.float32),
         max_steps=3000,
         random_initialization=False,
@@ -185,10 +200,19 @@ if __name__ == "__main__":
                     yaw_delta += delta
 
             # Update action
-            action[0] = np.clip(action[0] + thrust_delta, 0.0, 0.35)
-            action[1] = np.clip(action[1] + roll_delta, -1, 1)
-            action[2] = np.clip(action[2] + pitch_delta, -1, 1)
-            action[3] = np.clip(action[3] + yaw_delta, -1, 1)
+            if args.num_drones > 1:
+                for i in range(args.num_drones):
+                    base_ctrl = i * 4
+                    print(base_ctrl)
+                    action[base_ctrl] = np.clip(action[0] + thrust_delta, 0.0, 0.35)
+                    action[base_ctrl + 1] = np.clip(action[1] + roll_delta, -1, 1)
+                    action[base_ctrl + 2] = np.clip(action[2] + pitch_delta, -1, 1)
+                    action[base_ctrl + 3] = np.clip(action[3] + yaw_delta, -1, 1)
+            else:
+                action[0] = np.clip(action[0] + thrust_delta, 0.0, 0.35)
+                action[1] = np.clip(action[1] + roll_delta, -1, 1)
+                action[2] = np.clip(action[2] + pitch_delta, -1, 1)
+                action[3] = np.clip(action[3] + yaw_delta, -1, 1)
 
             # Step environment
             obs, reward, terminated, truncated, _ = env.step(action)

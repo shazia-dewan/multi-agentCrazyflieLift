@@ -19,6 +19,9 @@ OUT_OF_BOUNDS_RANGE = 2.0
 
 TERMINATION_PENALTY = -1.0
 
+DRONE_PROXIMITY_THRESHOLD = 0.25
+DRONE_COLLISION_THRESHOLD = 0.1
+
 class CrazyflieEnv(gym.Env):
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
@@ -158,7 +161,7 @@ class CrazyflieEnv(gym.Env):
         self.action_history_len = 16
         self.action_history = np.zeros((self.num_drones, self.action_history_len, self.ctrl_per_drone), dtype=np.float32)
         
-        # If using multiple drones, offset them along X axis
+        # If using multiple drones, offset them along X axis to avoid starting collisions
         drone_spacing_x = 0.4
         drone_offsets_x = np.linspace(-(self.num_drones - 1) / 2, (self.num_drones - 1) / 2, self.num_drones) * drone_spacing_x
 
@@ -199,14 +202,14 @@ class CrazyflieEnv(gym.Env):
                 vel_y = self.np_random.normal(loc=0.0, scale=std_vel)
                 vel_z = self.np_random.normal(loc=0.0, scale=std_vel)
                 vel_x = self.np_random.normal(loc=0.0, scale=std_vel)
-                self.data.qvel[base_qpos + 0: base_qpos + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
+                self.data.qvel[base_qvel + 0: base_qvel + 3] = np.array([vel_x, vel_y, vel_z], dtype=np.float32)
 
                 # Random starting angular velocity based on normal distribution
                 std_ang_vel = TRAINING_ANG_VEL_RANGE / 2
                 ang_vel_x = self.np_random.normal(loc=0.0, scale=std_ang_vel)
                 ang_vel_y = self.np_random.normal(loc=0.0, scale=std_ang_vel)
                 ang_vel_z = self.np_random.normal(loc=0.0, scale=std_ang_vel)
-                self.data.qvel[base_qpos + 3: base_qpos + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
+                self.data.qvel[base_qvel + 3: base_qvel + 6] = np.array([ang_vel_x, ang_vel_y, ang_vel_z], dtype=np.float32)
         else:
             # In non-training (eval) run, start drone(s) on the floor
             for i in range(self.num_drones):
@@ -272,6 +275,13 @@ class CrazyflieEnv(gym.Env):
         # Fill control array
         ctrl = np.zeros(self.num_drones * self.ctrl_per_drone, dtype=np.float32)
 
+        # Extract all drone positions for later proximity calculations
+        drone_positions = np.zeros((self.num_drones, 3), dtype=np.float32)
+        for i in range(self.num_drones):
+            base_qpos = i * self.qpos_per_drone
+            pos = self.data.qpos[base_qpos: base_qpos + 3]
+            drone_positions[i] = pos
+
         for i in range(self.num_drones):
             base_qpos = i * self.qpos_per_drone
             base_qvel = i * self.qvel_per_drone
@@ -286,7 +296,11 @@ class CrazyflieEnv(gym.Env):
             self.state[i] = np.concatenate([pos, quat, vel, ang_vel])
 
             # Set ctrl to clipped action (within action space)
-            ctrl_action = np.clip(action[base_ctrl : base_ctrl + 4], self.action_space.low, self.action_space.high)
+            ctrl_action = np.clip(
+                action[base_ctrl : base_ctrl + 4],
+                self.action_space.low[base_ctrl : base_ctrl + 4],
+                self.action_space.high[base_ctrl : base_ctrl + 4],
+            )
             ctrl[base_ctrl : base_ctrl + 4] = ctrl_action
             
             # Update action history: shift left and append current roll and pitch
@@ -325,6 +339,24 @@ class CrazyflieEnv(gym.Env):
                 self.reward_tracker.update("out_of_bounds", TERMINATION_PENALTY)
                 reward = self.reward_tracker.step_total()
                 terminated = True
+            
+            # MARL checks: penalize proximity to other drone(s), terminate if we collide
+            min_distance_to_other = np.inf
+            for j in range(self.num_drones):
+                if j == i:
+                    continue
+                distance_to_drone = np.linalg.norm(drone_positions[i] - drone_positions[j])
+                min_distance_to_other = min(min_distance_to_other, distance_to_drone)
+
+                # Too close
+                if distance_to_drone < DRONE_PROXIMITY_THRESHOLD:
+                    penalty = -0.01 * (1.0 - distance_to_drone / DRONE_PROXIMITY_THRESHOLD)
+                    self.reward_tracker.update(f"proximity_penalty_{j}", penalty)
+
+                # Collision
+                if distance_to_drone < DRONE_COLLISION_THRESHOLD:
+                    self.reward_tracker.update(f"collision_{j}", TERMINATION_PENALTY)
+                    terminated = True
 
             # Detect if we have exceeded max steps (truncate)
             truncated = self.timestep >= self.max_steps

@@ -76,6 +76,7 @@
 - xyz_hover model extended to work in *any* XYZ
   - No curriculum to progress initial state ranges (e.g. pos), instead, sample from a distribution
   - Modify features to prefer body coordinates (e.g. instead of world pos_error, use body frame pos_error)
+  - Trained with 24 parallel envs with 600k steps each
 - Results
   - Works well experimentally (14 tests for varying target positions in XYZ within ~5m)
     - Not perfect (fails one out of 14 tests), perhaps due to insufficient training or unoptimized features, rewards...

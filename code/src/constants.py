@@ -24,6 +24,13 @@ MODEL_SAVE_PATH = os.path.join(
     "ppo_model.pt"
 )
 
+MAPPO_MODEL_SAVE_PATH = os.path.join(
+    os.path.dirname(__file__),
+    "..",
+    "rl_models", 
+    "mappo_model.pt"
+)
+
 LOG_FILE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",

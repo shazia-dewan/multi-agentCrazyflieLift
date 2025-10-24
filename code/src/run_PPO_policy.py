@@ -228,7 +228,7 @@ if __name__ == "__main__":
     render_env = CrazyflieEnv(
         xml_path=SCENE_PATH,
         num_drones=1,
-        target_pos=np.array([0.0, 0.0, 0.2], dtype=np.float32),
+        target_pos=np.array([-7.0, 7.0, 2.5], dtype=np.float32),
         max_steps=1500,
         random_initialization=False,
         debug=True
@@ -250,7 +250,7 @@ if __name__ == "__main__":
         score_sum = sum(scores)
         rows.append([idx, feature_name] + scores + [score_sum])
 
-    headers = ["Idx", "Feature", "Vel_x", "Vel_y", "Vel_z", "Sum"]
+    headers = ["Idx", "Feature", "Thrust", "Roll", "Pitch", "Yaw", "Sum"]
     sortby = "Sum"
     col_idx = headers.index(sortby)
     rows.sort(key=lambda x: x[col_idx], reverse=True)

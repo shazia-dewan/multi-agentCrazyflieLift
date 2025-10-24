@@ -261,7 +261,7 @@ class PPOAgentVec:
         self.buffer.store(observations, actions, rewards, terminateds, log_probs, values)
 
 
-    def compute_gae(self, last_values: np.ndarray | None = None, lamda: float = 0.95) -> tuple[np.ndarray, np.ndarray]:
+    def _compute_gae(self, last_values: np.ndarray | None = None, lamda: float = 0.95) -> tuple[np.ndarray, np.ndarray]:
         """
         Compute GAE (Generalized Advantage Estimation) advantages and returns.
         GAE computes a lower variance advantage estimate when compared to discounted Monte Carlo by
@@ -362,10 +362,10 @@ class PPOAgentVec:
 
         # Observations: list of T arrays each (num_envs, obs_dim), flattens to (T * num_envs, obs_dim)
         # Actions: list of T arrays each (num_envs, action_dim), flattens to (T * num_envs, obs_dim)
-        # Returns and advantages already flattened from compute_gae() (T * num_envs,)
+        # Returns and advantages already flattened from _compute_gae() (T * num_envs,)
         observations_np = np.concatenate(self.buffer.observations, axis=0)
         actions_np = np.concatenate(self.buffer.actions, axis=0)
-        advantages_np, returns_np = self.compute_gae(last_values)
+        advantages_np, returns_np = self._compute_gae(last_values)
 
         # log_probs are of shape (num_envs,), flattens to shape (T*num_envs,)
         log_probs_t = torch.cat(self.buffer.log_probs, dim=0)

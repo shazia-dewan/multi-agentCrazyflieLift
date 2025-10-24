@@ -8,8 +8,9 @@ from tabulate import tabulate
 from constants import SCENE_PATH
 from hover_target_env_RL import CrazyflieEnv
 from PPO_agent import PPOAgentVec
+from MAPPO_agent import MAPPOAgent
 
-def evaluate(agent: PPOAgentVec, env: CrazyflieEnv) -> float:
+def evaluate(agent: PPOAgentVec | MAPPOAgent, env: CrazyflieEnv) -> float:
     """
     Runs a deterministic (mean-greedy) PPO policy on a single environment instance.
 
@@ -49,27 +50,48 @@ def main():
         nargs="?",
         const=True,
         default=False,
-        help="Optionally provide a model path. If omitted, uses default PPO save path."
+        help="Load a model using a model name. If omitted, uses default PPO save path."
+    )
+    parser.add_argument(
+        "--num_drones",
+        type=int,
+        default=1,
+        help="Number of drones in the environment. If > 1, MAPPOAgent is used."
     )
     args = parser.parse_args()
 
     if not args.load_model:
         print("No model provided, attempting default model 'ppo_model.pt'.")
-        model_name = "ppo_model"
+        if args.num_drones > 1:
+            model_name = "mappo_model"
+        else:
+            model_name = "ppo_model"
     else:
         model_name = args.load_model
     
     env = CrazyflieEnv(
         xml_path=SCENE_PATH,
-        num_drones=1,
+        num_drones=args.num_drones,
         max_steps=1500,
         random_initialization=False,
         debug=False
     )
-    agent = PPOAgentVec(
-        obs_dim=env.observation_space.shape[0],
-        action_dim=env.action_space.shape[0]
-    )
+
+    # Choose agent based on num_drones
+    if args.num_drones > 1:
+        agent = MAPPOAgent(
+            obs_dim=env.observation_space.shape[0],
+            action_dim=env.action_space.shape[0],
+            num_drones=args.num_drones
+        )
+        print(f"Using MAPPOAgent for {args.num_drones} drones")
+    else:
+        agent = PPOAgentVec(
+            obs_dim=env.observation_space.shape[0],
+            action_dim=env.action_space.shape[0]
+        )
+        print("Using PPOAgentVec for single drone")
+
     model_path = os.path.join(
         os.path.dirname(__file__),
         "..",

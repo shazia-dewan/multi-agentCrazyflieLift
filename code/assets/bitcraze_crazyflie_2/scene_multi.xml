@@ -25,8 +25,23 @@
   </asset>
 
   <worldbody>
-    <camera name="track" pos="-1 0 .5" xyaxes="0 -1 0 1 0 2" mode="trackcom"/>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+
+    <!-- Camera to track drone, used during manual control (free cam is used for spectating RL drone) -->
+    <camera name="track" pos="4 0 1" xyaxes="1 0 0 0 1 0" mode="targetbody" target="cf2"/>
+
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <geom name="target" type="sphere" size="0.02"
+      pos="0 0 1.0" rgba="1 0 0 0.4"
+      contype="0" conaffinity="0"
+    />
+
+    <!-- XYZ axes visualization -->
+    <body name="axes" pos="0 0 0">
+      <geom type="capsule" fromto="0 0 0 0.2 0 0" size="0.005" rgba="1 0 0 1" contype="0" conaffinity="0"/>
+      <geom type="capsule" fromto="0 0 0 0 0.2 0" size="0.005" rgba="0 1 0 1" contype="0" conaffinity="0"/>
+      <geom type="capsule" fromto="0 0 0 0 0 0.2" size="0.005" rgba="0 0 1 1" contype="0" conaffinity="0"/>
+    </body>
   </worldbody>
 </mujoco>
