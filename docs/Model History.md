@@ -90,6 +90,6 @@
   - Adapted for MARL --> E.g. iterate over each drone, compute observations, action, per-drone rewards (later summed for total step reward)
   - New rewards/penalties
     - Penalty for proximity to other drones and penalty for collision with other drone
-- Results (24 envs, 600k steps per env)
-  - Semi-successful XYZ hover, tested against ~20 targets, achieved semi-successful hover on ~15
-    - Drones have learned to hover around target while avoiding one another reasonable well, but still sometimes crash/fail
+- Results (24 envs, 900k steps per env)
+  - Semi-successful XYZ hover, tested against ~20 targets, eventually fails after some time on the vast majority
+    - Drones have learned to hover around target while avoiding one another reasonable well, but still eventually crash/fail for most targets

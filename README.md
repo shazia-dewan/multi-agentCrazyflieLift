@@ -17,7 +17,7 @@
 | 2025-09-12 | Environment setup         | Done ✅  |
 | 2025-09-17 | Single-agent baseline     | Done ✅  |
 | 2025-10-14 | Single-agent successful target hover in small XYZ  | Done ✅ |
-| YYYY-MM-DD | Single-agent successful hover in any XYZ   | 🔄 In progress |
+| 2025-10-20 | Reliable Single-agent hover in any XYZ   | Done ✅ |
 | YYYY-MM-DD | Multi-agent implementation   | 🔄 In progress |
 | YYYY-MM-DD | Testing on real drones   | ⏳ Planned |
 

@@ -5,7 +5,7 @@ import os
 import numpy as np
 from tabulate import tabulate
 
-from constants import SCENE_PATH
+from constants import SCENE_PATH, MULTI_SCENE_PATH
 from hover_target_env_RL import CrazyflieEnv
 from PPO_agent import PPOAgentVec
 from MAPPO_agent import MAPPOAgent
@@ -61,16 +61,21 @@ def main():
     args = parser.parse_args()
 
     if not args.load_model:
-        print("No model provided, attempting default model 'ppo_model.pt'.")
         if args.num_drones > 1:
+            print("No model provided, attempting default multi model 'mappo_model.pt'.")
             model_name = "mappo_model"
         else:
+            print("No model provided, attempting default single model 'ppo_model.pt'.")
             model_name = "ppo_model"
     else:
         model_name = args.load_model
     
+    if args.num_drones > 1:
+        scene = MULTI_SCENE_PATH
+    else:
+        scene = SCENE_PATH
     env = CrazyflieEnv(
-        xml_path=SCENE_PATH,
+        xml_path=scene,
         num_drones=args.num_drones,
         max_steps=1500,
         random_initialization=False,
