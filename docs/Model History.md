@@ -93,3 +93,8 @@
 - Results (24 envs, 900k steps per env)
   - Semi-successful XYZ hover, tested against ~20 targets, eventually fails after some time on the vast majority
     - Drones have learned to hover around target while avoiding one another reasonable well, but still eventually crash/fail for most targets
+
+**Model: multi_xyz_hover_40env**
+- Same setup as multi_xyz_hover but with 40 parallel envs, 600k steps per env
+  - Better results (same ~20 target testing, more truncation)
+    - Getting successful multi-XYZ hover might just be a compute issue at the moment, will explore more
