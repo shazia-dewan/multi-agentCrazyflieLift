@@ -396,7 +396,8 @@ class CrazyflieEnv(gym.Env):
         return obs, rewards, terminated, truncated, info
 
 
-
+    # _get_obs returns all drone observations, but individual drone observations should be separated (CTDE)
+    # For us, we do this in MAPPO_agent.py update_policy() --> separate into observations per agent
     def _get_obs(self) -> np.ndarray:
         """
         Retrieve an observation of the current drone state
