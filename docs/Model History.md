@@ -98,3 +98,5 @@
 - Same setup as multi_xyz_hover but with 40 parallel envs, 600k steps per env
   - Better results (same ~20 target testing, more truncation)
     - Getting successful multi-XYZ hover might just be a compute issue at the moment, will explore more
+  - Model **multi_xyz_hover_40env_2m400k** also uses 40 envs but was trained with 2.4 mil steps per env
+    - Better results, but still not ideal

@@ -1,5 +1,5 @@
 <mujoco model="CF2 scene">
-  <option integrator="RK4" density="1.225" viscosity="1.8e-5"/>
+  <option timestep="0.002" integrator="RK4" density="1.225" viscosity="1.8e-5"/>
 
   <include file="cf2_multi_1.xml"/>
   <include file="cf2_multi_2.xml"/>

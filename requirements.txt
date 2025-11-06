@@ -1,5 +1,8 @@
-mujoco==3.3.5
-numpy==1.26.3
+numpy==2.3.0
+mujoco==3.3.7
+mujoco-mjx==3.3.7
+jax==0.8.0
+brax==0.13.0
 gymnasium==1.2.0
 torch==2.8.0
 pandas==2.3.2
