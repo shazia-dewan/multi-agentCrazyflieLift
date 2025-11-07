@@ -28,7 +28,7 @@
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
 
     <!-- Camera to track drone, used during manual control (free cam is used for spectating RL drone) -->
-    <camera name="track" pos="4 0 1" xyaxes="1 0 0 0 1 0" mode="targetbody" target="cf2"/>
+    <camera name="track" pos="2 0 1" xyaxes="1 0 0 0 1 0" mode="targetbody" target="cf2"/>
 
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
 

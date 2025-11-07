@@ -3,6 +3,7 @@ mujoco==3.3.7
 mujoco-mjx==3.3.7
 jax==0.8.0
 brax==0.13.0
+playground==0.0.5
 gymnasium==1.2.0
 torch==2.8.0
 pandas==2.3.2
