@@ -6,7 +6,7 @@ import numpy as np
 from tabulate import tabulate
 
 from constants import SCENE_PATH, MULTI_SCENE_PATH
-from hover_target_env_RL import CrazyflieEnv
+from hover_target_env import CrazyflieEnv
 from PPO_agent import PPOAgentVec
 from MAPPO_agent import MAPPOAgent
 

@@ -16,7 +16,7 @@ from pynput import keyboard
 import pickle
 
 from constants import SCENE_PATH, MULTI_SCENE_PATH
-from hover_target_env_RL import CrazyflieEnv
+from hover_target_env import CrazyflieEnv
 from PPO_agent import PPOAgentVec
 
 # Store manual step info (obs, action, reward, done) so it can be used to train the agent by imitation
