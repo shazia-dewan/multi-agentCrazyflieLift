@@ -272,7 +272,6 @@ class CrazyflieEnv(gym.Env):
         self.mujoco_scene.geom_pos[target_geom_id] = self.target_pos
 
         # Termination values
-        reward = 0.0
         terminated = False
         truncated = False
 
