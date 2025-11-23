@@ -5,6 +5,7 @@ Motivation: After developing our environment and training schedule, we ran into 
 
 Solution: Use Jax (via MuJoCo Playground environments) to speed things up
 - Run in Google collab to get around Jax GPU OS constraints (Jax GPU is meant to run on Linux)
+- **NOTE**: Work on the MAPPO side of this project was continued in the notebook, elements of the non-jax MAPPO agent and training code in this repository may not reflect the final approach that we took.
 
 # Background
 
