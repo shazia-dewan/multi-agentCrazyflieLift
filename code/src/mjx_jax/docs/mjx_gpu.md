@@ -5,6 +5,7 @@ Motivation: After developing our environment and training schedule, we ran into 
 
 Solution: Use Jax (via MuJoCo Playground environments) to speed things up
 - Run in Google collab to get around Jax GPU OS constraints (Jax GPU is meant to run on Linux)
+- **NOTE**: Work on the MAPPO side of this project was continued in the notebook, elements of the non-jax MAPPO agent and training code in this repository may not reflect the final approach that we took.
 
 # Background
 
@@ -19,11 +20,14 @@ Since Jax/JIT traces operations and builds a computation graph, we want to keep 
 
 # Google Collab Notebook
 
-[Notebook with Crazyflie Env and Training](https://colab.research.google.com/drive/12d-VN10KeqZOebcIb97oElbwuV6OCgn4#scrollTo=L0VFs_8hNQ8F)
-
-
-For accessibility reasons, the notebook has also been included within the `mjx_gpu` folder
+Attached in the repo as `MARL.ipynb`, builds a MuJoCo playground environment and provides options to run single agent PPO with Brax or 2-drone MAPPO with a custom implementation. Both methods can be run with 1/2 drones but 2-drone PPO is essentially just single-agent RL with a centralized "dispatcher" controlling both drones, and 1-drone MAPPO reduces to PPO.
 
 # Resources
 
 [MuJoCo Playground](https://github.com/google-deepmind/mujoco_playground) with example [Cartpole Balance RL Notebook](https://colab.research.google.com/github/google-deepmind/mujoco_playground/blob/main/learning/notebooks/dm_control_suite.ipynb)
+
+[Brax](https://github.com/google/brax)
+- Brax's PPO implementation was referenced in the construction of our custom Jax MAPPO implementation
+
+
+[Jax](https://github.com/jax-ml/jax) and [Flax (Jax neural networks)](https://flax.readthedocs.io/en/v0.6.11/index.html)

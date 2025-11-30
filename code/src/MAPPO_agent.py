@@ -391,7 +391,7 @@ class MAPPOAgent:
                     ratio = torch.exp(log_probs - old_logp_batch)
                     unclipped = ratio * adv_batch
                     clipped = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_batch
-                    policy_loss = -(torch.min(unclipped, clipped).mean() + self.entropy_coefficient * dist.entropy().sum(dim=-1).mean())
+                    policy_loss = -(torch.min(unclipped, clipped).mean() - self.entropy_coefficient * dist.entropy().sum(dim=-1).mean())
 
                     # Value loss uses centralized observation and env-level returns
                     obs_value_batch = full_obs_flat[idx]   # (batch, full_obs_dim)

@@ -272,7 +272,6 @@ class CrazyflieEnv(gym.Env):
         self.mujoco_scene.geom_pos[target_geom_id] = self.target_pos
 
         # Termination values
-        reward = 0.0
         terminated = False
         truncated = False
 
@@ -398,6 +397,8 @@ class CrazyflieEnv(gym.Env):
 
     # _get_obs returns all drone observations, but individual drone observations should be separated (CTDE)
     # For us, we do this in MAPPO_agent.py update_policy() --> separate into observations per agent
+    # NOTE: Drones do not currently see other drone info in observation (e.g. no relative pos to other drones)
+    # this has been done in the Jax notebook but was not implemented here (yet)
     def _get_obs(self) -> np.ndarray:
         """
         Retrieve an observation of the current drone state
