@@ -1,5 +1,3 @@
-# This file is untested and a work in progress, may move to run_hardware_flax.py entirely
-
 """
 Hardware Deployment Script for Running Trained Models on Real Crazyflie Drones
 
@@ -18,40 +16,30 @@ Usage:
         --uri radio://0/80/2M/E7E7E7E7E7 radio://0/80/2M/E7E7E7E7E8
 """
 
+# Base imports
 import argparse
 import time
 import numpy as np
-import torch
-from typing import List, Optional
+from typing import List
 import sys
+from scipy.spatial.transform import Rotation as R
+import jax
+from flax.training import checkpoints
 
 # Crazyflie library imports
-try:
-    import cflib.crtp
-    from cflib.crazyflie import Crazyflie
-    from cflib.crazyflie.log import LogConfig
-    from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
-    from cflib.crazyflie.swarm import Swarm
-except ImportError:
-    print("ERROR: crazyflie-lib-python not installed!")
-    print("Install with: pip install cflib")
-    sys.exit(1)
+import cflib.crtp
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.log import LogConfig
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+from cflib.crazyflie.swarm import Swarm
 
-from PPO_agent import PPOAgentVec
-from MAPPO_agent import MAPPOAgent
+# Custom imports
+from mjx_jax import create_train_state, NUM_UPDATES
 
 
 class CrazyflieHardwareInterface:
     """Interface for collecting sensor data from a single Crazyflie drone"""
-    
-    # Action scaling factors (tunable for your specific setup)
-    # These convert simulation torques to hardware angles/rates
-    THRUST_SCALE = 60000 / 0.35      # Sim [0, 0.35] → Hardware PWM [0, 60000]
-    ANGLE_SCALE = 30.0               # Sim torque [-1, 1] → Angle ±30°
-    YAW_RATE_SCALE = 100.0           # Sim torque [-1, 1] → Yaw rate ±100°/s
-    MAX_ANGLE = 30.0                 # Maximum roll/pitch angle (safety limit)
-    MAX_YAW_RATE = 200.0             # Maximum yaw rate (safety limit)
-    
+        
     def __init__(self, uri: str, drone_id: int = 0):
         """
         Initialize hardware interface for a single drone
@@ -108,11 +96,6 @@ class CrazyflieHardwareInterface:
         log_config.add_variable('stateEstimate.vy', 'float')
         log_config.add_variable('stateEstimate.vz', 'float')
         
-        # Acceleration
-        log_config.add_variable('stateEstimate.ax', 'float')
-        log_config.add_variable('stateEstimate.ay', 'float')
-        log_config.add_variable('stateEstimate.az', 'float')
-        
         # Orientation (roll, pitch, yaw)
         log_config.add_variable('stateEstimate.roll', 'float')
         log_config.add_variable('stateEstimate.pitch', 'float')
@@ -140,11 +123,6 @@ class CrazyflieHardwareInterface:
         self.velocity[1] = data.get('stateEstimate.vy', 0.0)
         self.velocity[2] = data.get('stateEstimate.vz', 0.0)
         
-        # Acceleration (note: in Gs, might need conversion)
-        self.acceleration[0] = data.get('stateEstimate.ax', 0.0)
-        self.acceleration[1] = data.get('stateEstimate.ay', 0.0)
-        self.acceleration[2] = data.get('stateEstimate.az', 0.0)
-        
         # Orientation (in degrees)
         self.orientation[0] = data.get('stateEstimate.roll', 0.0)
         self.orientation[1] = data.get('stateEstimate.pitch', 0.0)
@@ -155,81 +133,75 @@ class CrazyflieHardwareInterface:
         self.angular_velocity[1] = data.get('gyro.y', 0.0)
         self.angular_velocity[2] = data.get('gyro.z', 0.0)
         
-    def get_observation(self, target_pos: np.ndarray, other_drones: List['CrazyflieHardwareInterface'] = None) -> np.ndarray:
+    def get_observation(
+        self,
+        target_pos: np.ndarray,
+        all_drones: List['CrazyflieHardwareInterface'],
+        initial_distance: float,
+        action_history: np.ndarray,
+    ) -> np.ndarray:
         """
-        Construct observation vector matching the training environment format
-        
+        Hardware observation construction matching the training environment format from the colab notebook.
+
         Parameters
         ----------
         target_pos : np.ndarray
             Target position [x, y, z]
-        other_drones : List[CrazyflieHardwareInterface], optional
-            Other drones for multi-agent observations
-            
+        all_drones : List[CrazyflieHardwareInterface]
+            All drones in the system (including self)
+        initial_distance : float
+            Initial distance to target (for normalization)
+        action_history : np.ndarray, optional
+            Per-drone action history, shape (N, A) for N past actions
+
         Returns
         -------
         np.ndarray
-            Observation vector matching training format
+            Flattened observation vector aligned with training environment expectation.
         """
-        obs = []
-        
-        # Convert orientation from degrees to radians
-        orientation_rad = np.deg2rad(self.orientation)
-        
-        # Target position relative to drone
-        rel_target = target_pos - self.position
-        obs.extend(rel_target)
-        
-        # Drone state
-        obs.extend(self.position)
-        obs.extend(self.velocity)
-        obs.extend(orientation_rad)
-        obs.extend(np.deg2rad(self.angular_velocity))  # Convert to rad/s
-        obs.extend(self.acceleration)
-        
-        # Add other drone positions if multi-agent
-        if other_drones:
-            for other in other_drones:
-                if other.drone_id != self.drone_id:
-                    rel_pos = other.position - self.position
-                    obs.extend(rel_pos)
-                    obs.extend(other.velocity)
-        
-        # Pad observation to match expected dimension (146 per drone in training)
-        # This is a simplified version - you may need to adjust based on your exact observation space
-        obs_array = np.array(obs, dtype=np.float32)
-        
-        # Pad to 146 if necessary
-        if len(obs_array) < 146:
-            obs_array = np.pad(obs_array, (0, 146 - len(obs_array)), mode='constant')
-        
-        return obs_array[:146]  # Truncate if too long
+
+        # Construct base observations (rotation as matrix and ang_vel in radians)
+        pos = self.position
+        vel = self.velocity
+        ang_vel = np.deg2rad(self.angular_velocity)
+        rotation = R.from_euler("xyz", self.orientation, degrees=True)
+        rotation_matrix = rotation.as_matrix()
+
+        # Relative target pos in body coordinates
+        pos_error_world = target_pos - pos
+        pos_error_norm = pos_error_world / (initial_distance + 1e-9)
+        rel_pos_body = rotation_matrix.T @ pos_error_norm
+
+        # Linear velocity in body frame
+        linear_vel_body = rotation_matrix.T @ vel
+
+        # Relative positions to all drones (body frame, currently includes self since notebook does)
+        rel_drone_positions_body = []
+        for d in all_drones:
+            rel_drone = d.position - pos
+            rel_drone_body = rotation_matrix.T @ rel_drone
+            rel_drone_positions_body.append(rel_drone_body)
+
+        rel_drone_positions_body = np.array(rel_drone_positions_body).flatten()
+
+        # Build core observation
+        core = np.concatenate([
+            pos,
+            vel,
+            ang_vel,
+            rotation_matrix.reshape(-1),
+            rel_pos_body,
+            linear_vel_body,
+            rel_positions_body,
+            action_history.flatten()
+        ])
+
+        return core.astype(np.float32)
+
         
     def send_action(self, action: np.ndarray):
         """
         Send action commands to the Crazyflie
-        
-        WARNING: This is an approximation of the simulation control!
-        
-        In simulation (MuJoCo):
-          - Actions are direct torques/thrust: [thrust, roll_torque, pitch_torque, yaw_torque]
-          - Ranges: thrust [0, 0.35], torques [-1, 1]
-          - Low-level control applied directly to rigid body physics
-        
-        On hardware (Crazyflie):
-          - send_setpoint expects: (roll_angle, pitch_angle, yaw_rate, thrust_PWM)
-          - The drone has onboard PID controllers that convert angles to motor commands
-          - This is a HIGH-LEVEL control interface, NOT direct torque control
-        
-        This function attempts to bridge the gap by:
-          1. Interpreting torque commands as desired angles (imperfect mapping)
-          2. Scaling to appropriate ranges
-          3. Sending to onboard controller
-        
-        For better sim-to-real transfer, consider:
-          - Retraining with attitude control in simulation
-          - Domain randomization to account for control differences
-          - Fine-tuning scaling factors based on hardware tests
         
         Parameters
         ----------
@@ -242,32 +214,26 @@ class CrazyflieHardwareInterface:
             
         # Extract action components from simulation format
         thrust = float(action[0])       # Simulation: [0, 0.35] thrust force
-        roll_torque = float(action[1])  # Simulation: [-1, 1] normalized torque
-        pitch_torque = float(action[2]) # Simulation: [-1, 1] normalized torque  
-        yaw_torque = float(action[3])   # Simulation: [-1, 1] normalized torque
+        roll = float(action[1])  # Simulation: [-1, 1] normalized torque
+        pitch = float(action[2]) # Simulation: [-1, 1] normalized torque  
+        yaw = float(action[3])   # Simulation: [-1, 1] normalized torque
         
-        # ========================================================================
-        # SCALING: Convert simulation torques to hardware angles/rates
-        # Adjust class constants at top of CrazyflieHardwareInterface if needed
-        # ========================================================================
+        thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
-        # Thrust: Scale from [0, 0.35] to PWM [0, 60000]
-        # Note: Crazyflie uses PWM for motor control, not normalized thrust
-        thrust_scaled = int(np.clip(thrust * self.THRUST_SCALE, 0, 60000))
+        # Map [-1, 1] limits to deg/s limits (using 200 for now, kind of arbitrary)
+        rate_max = 200.0
+        roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
+        pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
+        yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
         
-        # Roll/Pitch: Interpret torques as desired angles in degrees
-        # In sim: torques cause angular acceleration
-        # On hardware: angles are setpoints for onboard PID controller
-        roll_angle = np.clip(roll_torque * self.ANGLE_SCALE, -self.MAX_ANGLE, self.MAX_ANGLE)
-        pitch_angle = np.clip(pitch_torque * self.ANGLE_SCALE, -self.MAX_ANGLE, self.MAX_ANGLE)
-        
-        # Yaw: Interpret torque as yaw RATE (deg/s) not angle
-        # Crazyflie's send_setpoint uses yaw rate, not yaw angle
-        yaw_rate = np.clip(yaw_torque * self.YAW_RATE_SCALE, -self.MAX_YAW_RATE, self.MAX_YAW_RATE)
-        
-        # Send command via commander (roll, pitch, yaw_rate, thrust)
-        # This goes to the onboard attitude controller
-        self.scf.cf.commander.send_setpoint(roll_angle, pitch_angle, yaw_rate, thrust_scaled)
+        # Send command via commander
+        self.scf.cf.commander.send_setpoint_manual(
+            roll_rate_deg,
+            pitch_rate_deg,
+            yaw_rate_deg,
+            thrust_percent,
+            rate=True
+        )
         
     def disconnect(self):
         """Close connection to the Crazyflie"""
@@ -282,15 +248,20 @@ class CrazyflieHardwareInterface:
 class HardwareDeploymentController:
     """Main controller for running trained models on hardware"""
     
-    def __init__(self, model_path: str, uris: List[str], target_pos: np.ndarray = None, 
-                 control_rate: float = 100.0):
+    def __init__(
+            self, 
+            model_checkpoint_path: str, 
+            uris: List[str], 
+            target_pos: np.ndarray = None, 
+            control_rate: float = 100.0
+        ):
         """
         Initialize hardware deployment controller
         
         Parameters
         ----------
-        model_path : str
-            Path to the trained .pt model file
+        model_checkpoint_path : str
+            Path to the flax checkpoint folder with the trained model info
         uris : List[str]
             List of Crazyflie URIs to connect to
         target_pos : np.ndarray, optional
@@ -298,8 +269,6 @@ class HardwareDeploymentController:
         control_rate : float
             Control loop frequency in Hz
         """
-        self.model_path = model_path
-        self.uris = uris
         self.num_drones = len(uris)
         self.target_pos = target_pos if target_pos is not None else np.array([0.0, 0.0, 1.0], dtype=np.float32)
         self.control_rate = control_rate
@@ -309,33 +278,14 @@ class HardwareDeploymentController:
         self.drones = [CrazyflieHardwareInterface(uri, i) for i, uri in enumerate(uris)]
         
         # Load agent
-        print(f"\nLoading model from {model_path}...")
-        self._load_agent()
+        init_rng = jax.random.PRNGKey(0)
+        init_state, _, _ = create_train_state(init_rng, num_updates=NUM_UPDATES)
+        loaded_state = checkpoints.restore_checkpoint(
+            ckpt_dir=model_checkpoint_path,
+            target=init_state,
+        )
+        self.agent = loaded_state
         
-    def _load_agent(self):
-        """Load the trained agent from file"""
-        # Determine observation and action dimensions
-        # This is based on your training environment
-        obs_dim = 146 * self.num_drones
-        action_dim = 4 * self.num_drones
-        
-        if self.num_drones > 1:
-            self.agent = MAPPOAgent(
-                obs_dim=obs_dim,
-                action_dim=action_dim,
-                num_drones=self.num_drones
-            )
-            print(f"Using MAPPOAgent for {self.num_drones} drones")
-        else:
-            self.agent = PPOAgentVec(
-                obs_dim=obs_dim,
-                action_dim=action_dim
-            )
-            print("Using PPOAgentVec for single drone")
-            
-        # Load model weights
-        self.agent.load(self.model_path)
-        print("✓ Model loaded successfully")
         
     def connect_all(self):
         """Connect to all drones"""
@@ -360,13 +310,15 @@ class HardwareDeploymentController:
         print("\n✓ All drones connected successfully")
         return True
         
+
     def disconnect_all(self):
         """Disconnect from all drones"""
         print("\nDisconnecting from all drones...")
         for drone in self.drones:
             if drone.connected:
                 drone.disconnect()
-                
+              
+    # TODO: ADJUST FOR FLAX, CURRENTLY TORCH (+ observation changes)
     def run_control_loop(self, duration: float = 30.0, verbose: bool = True):
         """
         Run the main control loop
@@ -460,16 +412,16 @@ def main():
         epilog="""
 Examples:
   Single drone:
-    python run_hardware_deployment.py --model_path ../rl_models/ppo_model.pt \\
+    python run_hardware_deployment.py --model_path ./checkpoint_1000_single \\
         --uri radio://0/80/2M/E7E7E7E7E7
   
   Multiple drones:
-    python run_hardware_deployment.py --model_path ../rl_models/mappo_model.pt \\
+    python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
         --uri radio://0/80/2M/E7E7E7E7E7 radio://0/80/2M/E7E7E7E7E8 \\
         --num_drones 2
         
   Custom target and duration:
-    python run_hardware_deployment.py --model_path ../rl_models/ppo_model.pt \\
+    python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
         --uri radio://0/80/2M/E7E7E7E7E7 \\
         --target 0.5 0.5 1.5 --duration 60
         """
@@ -479,7 +431,7 @@ Examples:
         "--model_path",
         type=str,
         required=True,
-        help="Path to the trained .pt model file"
+        help="Path to flax checkpoint folder with trained model"
     )
     
     parser.add_argument(
