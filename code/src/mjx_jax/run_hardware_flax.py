@@ -34,7 +34,7 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 # Custom imports
-from Actor import create_train_state, NUM_UPDATES
+from Actor import create_train_state, NUM_UPDATES, PER_ENV_OBS_DIM
 
 
 class CrazyflieHardwareInterface:
@@ -345,6 +345,13 @@ class HardwareDeploymentController:
             action_histories.append(np.zeros((4, 4), dtype=np.float32))
 
         log_path = os.path.join(os.path.dirname(__file__), "drone_obs.log")
+
+        # Flax model
+        def inference_fn(obs_per_agent):
+            apply_fn = self.agent.policy_state.apply_fn
+            params = self.agent.policy_state.params
+            mean, _ = apply_fn(params, obs_per_agent)
+            return mean
         
         try:
             with open(log_path, "w") as log_file:
@@ -375,8 +382,13 @@ class HardwareDeploymentController:
                             f"ActionHistory={act_hist}\n"
                         )
                         log_file.flush()
-                    log_file.write("\n")
 
+                    # Log action that agent would have taken (testing)
+                    observations = np.array(observations, dtype=np.float32)
+                    obs_per_drone = observations.reshape((self.num_drones, PER_ENV_OBS_DIM))
+                    agent_actions = inference_fn(obs_per_drone).reshape((-1,))
+                    log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
+                    log_file.write("\n")
                     
                     # Send hover action to all drones, can test different values, should hover at ~0.26487
                     for i, drone in enumerate(self.drones):
@@ -517,13 +529,12 @@ Examples:
         """
     )
     
-    # TODO: Commented for now whlie we test dummy control
-    # parser.add_argument(
-    #     "--model_path",
-    #     type=str,
-    #     required=True,
-    #     help="Path to flax checkpoint folder with trained model"
-    # )
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="./checkpoint_1000",
+        help="Path to flax checkpoint folder with trained model"
+    )
     
     parser.add_argument(
         "--uri",
