@@ -417,7 +417,9 @@ class HardwareDeploymentController:
                     # Send hover action to all drones, can test different values, should hover at ~0.26487
                     for i, drone in enumerate(self.drones):
                         hover_thrust = 0.26487
-                        drone.send_action(np.array([hover_thrust, 0.0, 0.0, 0.0]))
+                        # Experimentally, the actual hover thrust is ~0.77 times the mujoco hover thrust
+                        test_hover_thrust = hover_thrust * 0.77
+                        drone.send_action(np.array([test_hover_thrust, 0.0, 0.0, 0.0]))
                         action_histories[i] = np.roll(action_histories[i], shift=-1, axis=0)
                         
                     step_count += 1
