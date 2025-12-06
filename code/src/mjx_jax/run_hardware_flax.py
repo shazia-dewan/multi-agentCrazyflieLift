@@ -13,7 +13,7 @@ Usage:
     
     For multiple drones:
     python run_hardware_deployment.py --model_path ../rl_models/mappo_model.pt --num_drones 2 \
-        --uri radio://0/80/2M/E7E7E7E7E7 radio://0/80/2M/E7E7E7E7E8
+        --uri radio://0/80/2M/E7E7E7E701 radio://0/80/2M/E7E7E7E708
 """
 
 # Base imports
@@ -55,11 +55,10 @@ class CrazyflieHardwareInterface:
         self.drone_id = drone_id
         
         # State variables (updated by log callbacks)
-        self.position = np.zeros(3, dtype=np.float32)  # [x, y, z]
-        self.velocity = np.zeros(3, dtype=np.float32)  # [vx, vy, vz]
-        self.acceleration = np.zeros(3, dtype=np.float32)  # [ax, ay, az]
-        self.orientation = np.zeros(3, dtype=np.float32)  # [roll, pitch, yaw] in degrees
-        self.angular_velocity = np.zeros(3, dtype=np.float32)  # [gx, gy, gz]
+        self.position = np.zeros(3, dtype=np.float32) # [x, y, z]
+        self.quaternion = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32) # [qx, qy, qz, qw]
+        self.velocity = np.zeros(3, dtype=np.float32) # [vx, vy, vz]
+        self.angular_velocity = np.zeros(3, dtype=np.float32) # [gx, gy, gz]
         
         self.connected = False
         self.scf = None
@@ -81,35 +80,50 @@ class CrazyflieHardwareInterface:
             self.connected = False
             
     def _setup_logging(self):
-        """Configure log variables to stream from the Crazyflie"""
+        """
+        Configure log variables to stream from the Crazyflie.
+        """
+
+        # NOTE: Max log size is 26. bytes - can't print all info in one block
         
-        # Create log configuration for state estimation data
-        log_config = LogConfig(name='StateEstimate', period_in_ms=10)  # 100 Hz
+        # Block 1: position + velocity
+        log_pos_vel = LogConfig(name='pos_vel', period_in_ms=10)
+
+        log_pos_vel.add_variable('stateEstimate.x', 'float')
+        log_pos_vel.add_variable('stateEstimate.y', 'float')
+        log_pos_vel.add_variable('stateEstimate.z', 'float')
+
+        log_pos_vel.add_variable('stateEstimate.vx', 'float')
+        log_pos_vel.add_variable('stateEstimate.vy', 'float')
+        log_pos_vel.add_variable('stateEstimate.vz', 'float')
+
+        self.scf.cf.log.add_config(log_pos_vel)
+        log_pos_vel.data_received_cb.add_callback(self._log_callback)
+        log_pos_vel.start()
         
-        # Position
-        log_config.add_variable('stateEstimate.x', 'float')
-        log_config.add_variable('stateEstimate.y', 'float')
-        log_config.add_variable('stateEstimate.z', 'float')
-        
-        # Velocity
-        log_config.add_variable('stateEstimate.vx', 'float')
-        log_config.add_variable('stateEstimate.vy', 'float')
-        log_config.add_variable('stateEstimate.vz', 'float')
-        
-        # Orientation (roll, pitch, yaw)
-        log_config.add_variable('stateEstimate.roll', 'float')
-        log_config.add_variable('stateEstimate.pitch', 'float')
-        log_config.add_variable('stateEstimate.yaw', 'float')
-        
-        # Gyroscope (angular velocity)
-        log_config.add_variable('gyro.x', 'float')
-        log_config.add_variable('gyro.y', 'float')
-        log_config.add_variable('gyro.z', 'float')
-        
-        # Add log configuration and start logging
-        self.scf.cf.log.add_config(log_config)
-        log_config.data_received_cb.add_callback(self._log_callback)
-        log_config.start()
+
+        # Block 2: Quaternion
+        log_quat = LogConfig(name='quat', period_in_ms=10)
+
+        log_quat.add_variable('stateEstimate.qx', 'float')
+        log_quat.add_variable('stateEstimate.qy', 'float')
+        log_quat.add_variable('stateEstimate.qz', 'float')
+        log_quat.add_variable('stateEstimate.qw', 'float')
+
+        self.scf.cf.log.add_config(log_quat)
+        log_quat.data_received_cb.add_callback(self._log_callback)
+        log_quat.start()
+
+        # Block 3: Angular velocity (gyro)
+        log_gyro = LogConfig(name='gyro', period_in_ms=10)
+
+        log_gyro.add_variable('gyro.x', 'float')
+        log_gyro.add_variable('gyro.y', 'float')
+        log_gyro.add_variable('gyro.z', 'float')
+
+        self.scf.cf.log.add_config(log_gyro)
+        log_gyro.data_received_cb.add_callback(self._log_callback)
+        log_gyro.start()
         
     def _log_callback(self, timestamp, data, logconf):
         """Callback function to update state variables from log data"""
@@ -117,16 +131,17 @@ class CrazyflieHardwareInterface:
         self.position[0] = data.get('stateEstimate.x', 0.0)
         self.position[1] = data.get('stateEstimate.y', 0.0)
         self.position[2] = data.get('stateEstimate.z', 0.0)
-        
+
+        # Quaternion
+        self.quaternion[0] = data.get('stateEstimate.qx', 0.0)
+        self.quaternion[1] = data.get('stateEstimate.qy', 0.0)
+        self.quaternion[2] = data.get('stateEstimate.qz', 0.0)
+        self.quaternion[3] = data.get('stateEstimate.qw', 0.0)
+
         # Velocity
         self.velocity[0] = data.get('stateEstimate.vx', 0.0)
         self.velocity[1] = data.get('stateEstimate.vy', 0.0)
         self.velocity[2] = data.get('stateEstimate.vz', 0.0)
-        
-        # Orientation (in degrees)
-        self.orientation[0] = data.get('stateEstimate.roll', 0.0)
-        self.orientation[1] = data.get('stateEstimate.pitch', 0.0)
-        self.orientation[2] = data.get('stateEstimate.yaw', 0.0)
         
         # Angular velocity (in deg/s)
         self.angular_velocity[0] = data.get('gyro.x', 0.0)
@@ -162,10 +177,18 @@ class CrazyflieHardwareInterface:
 
         # Construct base observations (rotation as matrix and ang_vel in radians)
         pos = self.position
+
+        # Catch invalid (0-magnitude) quats
+        try:
+            quat = self.quaternion
+            rotation_matrix = R.from_quat(quat).as_matrix()
+        except:
+            quat = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+            rotation_matrix = R.from_quat(quat).as_matrix()
+
         vel = self.velocity
+
         ang_vel = np.deg2rad(self.angular_velocity)
-        rotation = R.from_euler("xyz", self.orientation, degrees=True)
-        rotation_matrix = rotation.as_matrix()
 
         # Relative target pos in body coordinates
         pos_error_world = target_pos - pos
@@ -384,16 +407,17 @@ class HardwareDeploymentController:
                         log_file.flush()
 
                     # Log action that agent would have taken (testing)
-                    observations = np.array(observations, dtype=np.float32)
-                    obs_per_drone = observations.reshape((self.num_drones, PER_ENV_OBS_DIM))
-                    agent_actions = inference_fn(obs_per_drone).reshape((-1,))
-                    log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
-                    log_file.write("\n")
+                    if self.num_drones > 1:
+                        observations = np.array(observations, dtype=np.float32)
+                        obs_per_drone = observations.reshape((self.num_drones, PER_ENV_OBS_DIM))
+                        agent_actions = inference_fn(obs_per_drone).reshape((-1,))
+                        log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
+                        log_file.write("-------------\n")
                     
                     # Send hover action to all drones, can test different values, should hover at ~0.26487
                     for i, drone in enumerate(self.drones):
                         hover_thrust = 0.26487
-                        drone.send_action(np.array([hover_thrust / 4, 0.0, 0.0, 0.0]))
+                        drone.send_action(np.array([hover_thrust, 0.0, 0.0, 0.0]))
                         action_histories[i] = np.roll(action_histories[i], shift=-1, axis=0)
                         
                     step_count += 1
@@ -515,24 +539,27 @@ def main():
 Examples:
   Single drone:
     python run_hardware_deployment.py --model_path ./checkpoint_1000_single \\
-        --uri radio://0/80/2M/E7E7E7E7E7
+        --uri radio://0/100/2M/E7E7E7E7E7
   
   Multiple drones:
     python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
-        --uri radio://0/80/2M/E7E7E7E7E7 radio://0/80/2M/E7E7E7E7E8 \\
+        --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8 \\
         --num_drones 2
         
   Custom target and duration:
     python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
-        --uri radio://0/80/2M/E7E7E7E7E7 \\
+        --uri radio://0/100/2M/E7E7E7E7E7 \\
         --target 0.5 0.5 1.5 --duration 60
         """
     )
     
+    default_model_path = os.path.abspath(
+        os.path.join(os.getcwd(), "checkpoints_1000")
+    )
     parser.add_argument(
         "--model_path",
         type=str,
-        default="./checkpoint_1000",
+        default=default_model_path,
         help="Path to flax checkpoint folder with trained model"
     )
     
@@ -562,8 +589,8 @@ Examples:
     parser.add_argument(
         "--duration",
         type=float,
-        default=10.0,
-        help="Duration to run in seconds (default: 10)"
+        default=3.0,
+        help="Duration to run in seconds (default: 3)"
     )
     
     parser.add_argument(
@@ -592,7 +619,7 @@ Examples:
     
     # Create controller
     controller = HardwareDeploymentController(
-        model_path=args.model_path,
+        model_checkpoint_path=args.model_path,
         uris=args.uri,
         target_pos=target_pos,
         control_rate=args.control_rate
