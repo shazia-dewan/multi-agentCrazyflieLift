@@ -11,3 +11,4 @@ matplotlib==3.10.6
 cflib>=0.1.25
 jax==0.8.1
 flax==0.10.3
+cfclient==2025.9
