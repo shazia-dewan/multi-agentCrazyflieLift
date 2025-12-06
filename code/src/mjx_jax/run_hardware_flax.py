@@ -644,6 +644,11 @@ Examples:
     finally:
         # Ensure cleanup
         controller.disconnect_all()
+        
+        for i in range(num_drones):
+            from cflib.utils.power_switch import PowerSwitch
+            PowerSwitch(args.uri[i]).stm_power_cycle()
+
         print("\n✓ Hardware deployment completed")
 
 
