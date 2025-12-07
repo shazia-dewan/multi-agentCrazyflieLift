@@ -412,15 +412,20 @@ class HardwareDeploymentController:
                         obs_per_drone = observations.reshape((self.num_drones, PER_ENV_OBS_DIM))
                         agent_actions = inference_fn(obs_per_drone).reshape((-1,))
                         log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
-                        log_file.write("-------------\n")
+                    
+                    log_file.write("-------------\n")
                     
                     # Send hover action to all drones, can test different values, should hover at ~0.26487
                     for i, drone in enumerate(self.drones):
                         hover_thrust = 0.26487
                         # Experimentally, the actual hover thrust is ~0.77 times the mujoco hover thrust
                         test_hover_thrust = hover_thrust * 0.77
-                        drone.send_action(np.array([test_hover_thrust, 0.0, 0.0, 0.0]))
+                        action = np.array([test_hover_thrust, 0.0, 0.0, 0.0])
+                        drone.send_action(action)
+
+                        # Update action history
                         action_histories[i] = np.roll(action_histories[i], shift=-1, axis=0)
+                        action_histories[i][-1] = action
                         
                     step_count += 1
                     
