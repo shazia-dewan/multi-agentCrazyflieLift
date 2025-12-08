@@ -84,26 +84,33 @@ class CrazyflieHardwareInterface:
         Configure log variables to stream from the Crazyflie.
         """
 
-        # NOTE: Max log size is 26. bytes - can't print all info in one block
+        # NOTE: Max log size is 26. bytes - can't print all info in one block, split into many
+        # Log less critical data at lower frequency to converve bandwitdh
         
-        # Block 1: position + velocity
-        log_pos_vel = LogConfig(name='pos_vel', period_in_ms=10)
+        # Block 1: Position
+        log_pos = LogConfig(name='pos', period_in_ms=20)
 
-        log_pos_vel.add_variable('stateEstimate.x', 'float')
-        log_pos_vel.add_variable('stateEstimate.y', 'float')
-        log_pos_vel.add_variable('stateEstimate.z', 'float')
+        log_pos.add_variable('stateEstimate.x', 'float')
+        log_pos.add_variable('stateEstimate.y', 'float')
+        log_pos.add_variable('stateEstimate.z', 'float')
 
-        log_pos_vel.add_variable('stateEstimate.vx', 'float')
-        log_pos_vel.add_variable('stateEstimate.vy', 'float')
-        log_pos_vel.add_variable('stateEstimate.vz', 'float')
+        self.scf.cf.log.add_config(log_pos)
+        log_pos.data_received_cb.add_callback(self._log_callback)
+        log_pos.start()
 
-        self.scf.cf.log.add_config(log_pos_vel)
-        log_pos_vel.data_received_cb.add_callback(self._log_callback)
-        log_pos_vel.start()
+        # Block 2: Velocity
+        log_vel = LogConfig(name='vel', period_in_ms=20)
+
+        log_vel.add_variable('stateEstimate.vx', 'float')
+        log_vel.add_variable('stateEstimate.vy', 'float')
+        log_vel.add_variable('stateEstimate.vz', 'float')
+
+        self.scf.cf.log.add_config(log_vel)
+        log_vel.data_received_cb.add_callback(self._log_callback)
+        log_vel.start()
         
-
-        # Block 2: Quaternion
-        log_quat = LogConfig(name='quat', period_in_ms=10)
+        # Block 3: Quaternion
+        log_quat = LogConfig(name='quat', period_in_ms=30)
 
         log_quat.add_variable('stateEstimate.qx', 'float')
         log_quat.add_variable('stateEstimate.qy', 'float')
@@ -114,7 +121,7 @@ class CrazyflieHardwareInterface:
         log_quat.data_received_cb.add_callback(self._log_callback)
         log_quat.start()
 
-        # Block 3: Angular velocity (gyro)
+        # Block 4: Angular velocity (gyro)
         log_gyro = LogConfig(name='gyro', period_in_ms=10)
 
         log_gyro.add_variable('gyro.x', 'float')
@@ -126,27 +133,28 @@ class CrazyflieHardwareInterface:
         log_gyro.start()
         
     def _log_callback(self, timestamp, data, logconf):
-        """Callback function to update state variables from log data"""
-        # Position
-        self.position[0] = data.get('stateEstimate.x', 0.0)
-        self.position[1] = data.get('stateEstimate.y', 0.0)
-        self.position[2] = data.get('stateEstimate.z', 0.0)
+        """
+        Callback function for log data reception - each log does not contain all values,
+        update values that are present.
+        """
+        for key, value in data.items():
+            if key == 'stateEstimate.x': self.position[0] = value
+            elif key == 'stateEstimate.y': self.position[1] = value
+            elif key == 'stateEstimate.z': self.position[2] = value
 
-        # Quaternion
-        self.quaternion[0] = data.get('stateEstimate.qx', 0.0)
-        self.quaternion[1] = data.get('stateEstimate.qy', 0.0)
-        self.quaternion[2] = data.get('stateEstimate.qz', 0.0)
-        self.quaternion[3] = data.get('stateEstimate.qw', 0.0)
+            elif key == 'stateEstimate.vx': self.velocity[0] = value
+            elif key == 'stateEstimate.vy': self.velocity[1] = value
+            elif key == 'stateEstimate.vz': self.velocity[2] = value
 
-        # Velocity
-        self.velocity[0] = data.get('stateEstimate.vx', 0.0)
-        self.velocity[1] = data.get('stateEstimate.vy', 0.0)
-        self.velocity[2] = data.get('stateEstimate.vz', 0.0)
-        
-        # Angular velocity (in deg/s)
-        self.angular_velocity[0] = data.get('gyro.x', 0.0)
-        self.angular_velocity[1] = data.get('gyro.y', 0.0)
-        self.angular_velocity[2] = data.get('gyro.z', 0.0)
+            elif key == 'stateEstimate.qx': self.quaternion[0] = value
+            elif key == 'stateEstimate.qy': self.quaternion[1] = value
+            elif key == 'stateEstimate.qz': self.quaternion[2] = value
+            elif key == 'stateEstimate.qw': self.quaternion[3] = value
+
+            elif key == 'gyro.x': self.angular_velocity[0] = value
+            elif key == 'gyro.y': self.angular_velocity[1] = value
+            elif key == 'gyro.z': self.angular_velocity[2] = value
+
         
     def get_observation(
         self,
@@ -255,8 +263,8 @@ class CrazyflieHardwareInterface:
         
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
-        # Map [-1, 1] limits to deg/s limits (using 200 for now, kind of arbitrary)
-        rate_max = 200.0
+        # Map [-1, 1] limits to deg/s limits for safety
+        rate_max = 10.0
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
