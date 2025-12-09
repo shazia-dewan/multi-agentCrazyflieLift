@@ -31,3 +31,5 @@ If you are planning on running a multi-agent model, you can run the following:
 ```
 python run_hardware_deployment.py --model_path </path/to/model> --num_drones <num_drones> --uri radio://0/<radio_channel>/<radio_bandwidth>/<radio_address> radio://0/<radio_channel>/<radio_bandwidth>/<radio_address>
 ```
+
+Fine-tuning between different drones is also required. In our experimentation we noticed a different response from the same thrust value across multiple drones. 
