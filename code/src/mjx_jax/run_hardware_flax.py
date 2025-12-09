@@ -55,10 +55,10 @@ class CrazyflieHardwareInterface:
         self.drone_id = drone_id
         
         # State variables (updated by log callbacks)
-        self.position = np.zeros(3, dtype=np.float32) # [x, y, z]
+        self.position = np.zeros(3, dtype=np.float32) # [x, y, z] in meters
         self.quaternion = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32) # [qx, qy, qz, qw]
-        self.velocity = np.zeros(3, dtype=np.float32) # [vx, vy, vz]
-        self.angular_velocity = np.zeros(3, dtype=np.float32) # [gx, gy, gz]
+        self.velocity = np.zeros(3, dtype=np.float32) # [vx, vy, vz] in m/s
+        self.angular_velocity = np.zeros(3, dtype=np.float32) # [gx, gy, gz] in radians
         
         self.connected = False
         self.scf = None
@@ -138,22 +138,22 @@ class CrazyflieHardwareInterface:
         update values that are present.
         """
         for key, value in data.items():
-            if key == 'stateEstimate.x': self.position[0] = value
-            elif key == 'stateEstimate.y': self.position[1] = value
-            elif key == 'stateEstimate.z': self.position[2] = value
+            if key == 'stateEstimate.x': self.position[0] = value / 100.0
+            elif key == 'stateEstimate.y': self.position[1] = value / 100.0
+            elif key == 'stateEstimate.z': self.position[2] = value / 100.0
 
-            elif key == 'stateEstimate.vx': self.velocity[0] = value
-            elif key == 'stateEstimate.vy': self.velocity[1] = value
-            elif key == 'stateEstimate.vz': self.velocity[2] = value
+            elif key == 'stateEstimate.vx': self.velocity[0] = value / 100.0
+            elif key == 'stateEstimate.vy': self.velocity[1] = value / 100.0
+            elif key == 'stateEstimate.vz': self.velocity[2] = value / 100.0
 
             elif key == 'stateEstimate.qx': self.quaternion[0] = value
             elif key == 'stateEstimate.qy': self.quaternion[1] = value
             elif key == 'stateEstimate.qz': self.quaternion[2] = value
             elif key == 'stateEstimate.qw': self.quaternion[3] = value
 
-            elif key == 'gyro.x': self.angular_velocity[0] = value
-            elif key == 'gyro.y': self.angular_velocity[1] = value
-            elif key == 'gyro.z': self.angular_velocity[2] = value
+            elif key == 'gyro.x': self.angular_velocity[0] = np.deg2rad(value)
+            elif key == 'gyro.y': self.angular_velocity[1] = np.deg2rad(value)
+            elif key == 'gyro.z': self.angular_velocity[2] = np.deg2rad(value)
 
         
     def get_observation(
@@ -183,6 +183,8 @@ class CrazyflieHardwareInterface:
             Flattened observation vector aligned with training environment expectation.
         """
 
+        # NOTE: Need flow deck connected for XY observations
+
         # Construct base observations (rotation as matrix and ang_vel in radians)
         pos = self.position
 
@@ -196,7 +198,7 @@ class CrazyflieHardwareInterface:
 
         vel = self.velocity
 
-        ang_vel = np.deg2rad(self.angular_velocity)
+        ang_vel = self.angular_velocity
 
         # Relative target pos in body coordinates
         pos_error_world = target_pos - pos
@@ -390,6 +392,7 @@ class HardwareDeploymentController:
                     loop_start = time.time()
 
                     observations = []
+                    obs_tuple = []
                     for i, drone in enumerate(self.drones):
                         obs_flat, obs_tuple = drone.get_observation(
                             self.target_pos, 
@@ -398,9 +401,25 @@ class HardwareDeploymentController:
                             action_histories[i]
                         )
                         observations.append(obs_flat)
+                    
+                    # Send hover action to all drones, can test different values, should hover at ~0.26487
+                    for i, drone in enumerate(self.drones):
+                        hover_thrust = 0.26487
+                        # Experimentally, the actual hover thrust is less than the mujoco hover thrust
+                        test_hover_thrust = hover_thrust * 0.8
+                        action = np.array([test_hover_thrust, 0.0, 0.0, 0.0])
+                        drone.send_action(action)
+
+                        # Update action history
+                        action_histories[i][:-1] = action_histories[i][1:]
+                        action_histories[i][-1] = action
+
+
+                    # Logs
+                    for i, drone in enumerate(self.drones):
 
                         # Log observations
-                        pos, vel, ang_vel, rot_mat, rel_pos_body, lin_vel_body, rel_drones, act_hist = obs_tuple
+                        pos, vel, ang_vel, rot_mat, rel_pos_body, lin_vel_body, rel_drones, _ = obs_tuple
                         log_file.write(
                             f"Step {step_count}, Drone {i+1}, "
                             f"Pos={pos}, "
@@ -410,7 +429,7 @@ class HardwareDeploymentController:
                             f"RelPosBody={rel_pos_body}, "
                             f"LinVelBody={lin_vel_body}, "
                             f"RelDronePosBody={rel_drones}, "
-                            f"ActionHistory={act_hist}\n"
+                            f"ActionHistory={action_histories[i]}\n"
                         )
                         log_file.flush()
 
@@ -422,18 +441,6 @@ class HardwareDeploymentController:
                         log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
                     
                     log_file.write("-------------\n")
-                    
-                    # Send hover action to all drones, can test different values, should hover at ~0.26487
-                    for i, drone in enumerate(self.drones):
-                        hover_thrust = 0.26487
-                        # Experimentally, the actual hover thrust is ~0.77 times the mujoco hover thrust
-                        test_hover_thrust = hover_thrust * 0.77
-                        action = np.array([test_hover_thrust, 0.0, 0.0, 0.0])
-                        drone.send_action(action)
-
-                        # Update action history
-                        action_histories[i] = np.roll(action_histories[i], shift=-1, axis=0)
-                        action_histories[i][-1] = action
                         
                     step_count += 1
                     

@@ -19,8 +19,8 @@
 | 2025-10-14 | Single-agent successful target hover in small XYZ  | Done ✅ |
 | 2025-10-20 | Reliable Single-agent hover in wide range of XYZ   | Done ✅ |
 | 2025-11-25 | Multi-agent successful target hover in wide range of XYZ (Jax Notebook)   | Done ✅ |
-| YYYY-MM-DD | Domain randomization for Crazyflie env   | 🔄 In progress |
-| YYYY-MM-DD | Testing on real drones (Develop CF2 API + Tests)   | 🔄 In progress |
+| YYYY-MM-DD | Domain randomization for Crazyflie env   | Done ✅ |
+| YYYY-MM-DD | Apply policy to real drones  | 🔄 In progress |
 
 ## 📂 Repo Structure
 - docs/ – Reports and slides
