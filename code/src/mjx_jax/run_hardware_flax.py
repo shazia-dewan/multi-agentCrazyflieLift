@@ -26,6 +26,8 @@ from scipy.spatial.transform import Rotation as R
 import jax
 from flax.training import checkpoints
 import os
+from brax.io import model
+from brax.training.agents.ppo import networks as ppo_networks
 
 # Crazyflie library imports
 import cflib.crtp
@@ -34,7 +36,7 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 # Custom imports
-from Actor import create_train_state, NUM_UPDATES, PER_ENV_OBS_DIM
+from Actor import create_train_state, NUM_UPDATES, PER_AGENT_OBS_DIM
 
 
 class CrazyflieHardwareInterface:
@@ -322,14 +324,31 @@ class HardwareDeploymentController:
         # Initialize drones
         self.drones = [CrazyflieHardwareInterface(uri, i) for i, uri in enumerate(uris)]
         
-        # Load agent
-        init_rng = jax.random.PRNGKey(0)
-        init_state, _, _ = create_train_state(init_rng, num_updates=NUM_UPDATES)
-        loaded_state = checkpoints.restore_checkpoint(
-            ckpt_dir=model_checkpoint_path,
-            target=init_state,
-        )
-        self.agent = loaded_state
+        # Load agent (single or double)
+        if self.num_drones > 1:
+            init_rng = jax.random.PRNGKey(0)
+            init_state, _, _ = create_train_state(init_rng, num_updates=NUM_UPDATES)
+            loaded_state = checkpoints.restore_checkpoint(
+                ckpt_dir=model_checkpoint_path,
+                target=init_state,
+            )
+            def inference_fn(obs_per_agent):
+                apply_fn = loaded_state.policy_state.apply_fn
+                params = loaded_state.policy_state.params
+                mean, _ = apply_fn(params, obs_per_agent)
+                return mean
+            
+            self.agent = inference_fn
+        else:
+            ppo_net = ppo_networks.make_ppo_networks(
+                observation_size=PER_AGENT_OBS_DIM,
+                action_size=4,
+            )
+            params = model.load_params(model_checkpoint_path)
+            inference_fn = ppo_networks.make_inference_fn(ppo_net)(params=params, deterministic=True)
+            self.agent = inference_fn
+
+
         
         
     def connect_all(self):
@@ -378,13 +397,6 @@ class HardwareDeploymentController:
             action_histories.append(np.zeros((4, 4), dtype=np.float32))
 
         log_path = os.path.join(os.path.dirname(__file__), "drone_obs.log")
-
-        # Flax model
-        def inference_fn(obs_per_agent):
-            apply_fn = self.agent.policy_state.apply_fn
-            params = self.agent.policy_state.params
-            mean, _ = apply_fn(params, obs_per_agent)
-            return mean
         
         try:
             with open(log_path, "w") as log_file:
@@ -433,13 +445,18 @@ class HardwareDeploymentController:
                         )
                         log_file.flush()
 
-                    # Log action that agent would have taken (testing)
+                    # Log action that agent would have taken (self.agent can be single or multi inference fn)
+                    observations = np.array(observations, dtype=np.float32)
+                    # Messy temporary fix: adjust obs for multi-agent case
                     if self.num_drones > 1:
-                        observations = np.array(observations, dtype=np.float32)
-                        obs_per_drone = observations.reshape((self.num_drones, PER_ENV_OBS_DIM))
-                        agent_actions = inference_fn(obs_per_drone).reshape((-1,))
-                        log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
-                    
+                        obs_per_drone = observations.reshape((self.num_drones, PER_AGENT_OBS_DIM * self.num_drones))
+                        agent_actions = self.agent(obs_per_drone).reshape((-1,))
+                    else:
+                        obs_per_drone = observations
+                        action, _ = self.agent(obs_per_drone, jax.random.PRNGKey(0))
+                        agent_actions = np.array(action).reshape((-1,))
+                        
+                    log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
                     log_file.write("-------------\n")
                         
                     step_count += 1
@@ -558,31 +575,13 @@ def main():
         description="Run trained model on real Crazyflie hardware",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  Single drone:
-    python run_hardware_deployment.py --model_path ./checkpoint_1000_single \\
-        --uri radio://0/100/2M/E7E7E7E7E7
-  
-  Multiple drones:
-    python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
-        --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8 \\
-        --num_drones 2
-        
-  Custom target and duration:
-    python run_hardware_deployment.py --model_path ./checkpoint_1000 \\
-        --uri radio://0/100/2M/E7E7E7E7E7 \\
-        --target 0.5 0.5 1.5 --duration 60
+            Examples:
+            Single drone:
+                python run_hardware_deployment.py --num_drones 1 --uri radio://0/100/2M/E7E7E7E7E7
+            
+            Multiple drones:
+                python run_hardware_deployment.py --num_drones 2 --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8
         """
-    )
-    
-    default_model_path = os.path.abspath(
-        os.path.join(os.getcwd(), "checkpoints_1000")
-    )
-    parser.add_argument(
-        "--model_path",
-        type=str,
-        default=default_model_path,
-        help="Path to flax checkpoint folder with trained model"
     )
     
     parser.add_argument(
@@ -636,12 +635,22 @@ Examples:
         print(f"Warning: num_drones ({num_drones}) doesn't match number of URIs ({len(args.uri)})")
         print(f"Using {len(args.uri)} URIs provided")
         num_drones = len(args.uri)
+
+    # Configure model path based on num_drones
+    if num_drones > 1:
+        model_path = os.path.abspath(
+            os.path.join(os.getcwd(), "MAPPO_model_checkpoint")
+        )
+    else:
+        model_path = os.path.abspath(
+            os.path.join(os.getcwd(), "PPO_model_checkpoint.pkl")
+        )
     
     target_pos = np.array(args.target, dtype=np.float32)
     
     # Create controller
     controller = HardwareDeploymentController(
-        model_checkpoint_path=args.model_path,
+        model_checkpoint_path=model_path,
         uris=args.uri,
         target_pos=target_pos,
         control_rate=args.control_rate

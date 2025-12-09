@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 def parse_log_file(path):
     # Regex to capture Pos=[x y z]
@@ -40,7 +39,7 @@ def plot_positions(xs, ys, zs):
     ax.grid(True)
 
     # Separate XYZ vs step plot
-    fig2 = plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 6))
     plt.plot(steps, xs, label="X")
     plt.plot(steps, ys, label="Y")
     plt.plot(steps, zs, label="Z")
