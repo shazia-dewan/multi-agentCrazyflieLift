@@ -140,13 +140,13 @@ class CrazyflieHardwareInterface:
         update values that are present.
         """
         for key, value in data.items():
-            if key == 'stateEstimate.x': self.position[0] = value / 100.0
-            elif key == 'stateEstimate.y': self.position[1] = value / 100.0
-            elif key == 'stateEstimate.z': self.position[2] = value / 100.0
+            if key == 'stateEstimate.x': self.position[0] = value
+            elif key == 'stateEstimate.y': self.position[1] = value
+            elif key == 'stateEstimate.z': self.position[2] = value
 
-            elif key == 'stateEstimate.vx': self.velocity[0] = value / 100.0
-            elif key == 'stateEstimate.vy': self.velocity[1] = value / 100.0
-            elif key == 'stateEstimate.vz': self.velocity[2] = value / 100.0
+            elif key == 'stateEstimate.vx': self.velocity[0] = value
+            elif key == 'stateEstimate.vy': self.velocity[1] = value
+            elif key == 'stateEstimate.vz': self.velocity[2] = value
 
             elif key == 'stateEstimate.qx': self.quaternion[0] = value
             elif key == 'stateEstimate.qy': self.quaternion[1] = value
@@ -449,13 +449,13 @@ class HardwareDeploymentController:
                     observations = np.array(observations, dtype=np.float32)
                     # Messy temporary fix: adjust obs for multi-agent case
                     if self.num_drones > 1:
-                        obs_per_drone = observations.reshape((self.num_drones, PER_AGENT_OBS_DIM * self.num_drones))
+                        obs_per_drone = observations.reshape((self.num_drones, observations.shape))
                         agent_actions = self.agent(obs_per_drone).reshape((-1,))
                     else:
                         obs_per_drone = observations
                         action, _ = self.agent(obs_per_drone, jax.random.PRNGKey(0))
                         agent_actions = np.array(action).reshape((-1,))
-                        
+
                     log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
                     log_file.write("-------------\n")
                         
