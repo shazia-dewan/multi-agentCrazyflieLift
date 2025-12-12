@@ -28,6 +28,7 @@ from flax.training import checkpoints
 import os
 from brax.io import model
 from brax.training.agents.ppo import networks as ppo_networks
+from typing import Literal
 
 # Crazyflie library imports
 import cflib.crtp
@@ -260,15 +261,15 @@ class CrazyflieHardwareInterface:
             return
             
         # Extract action components from simulation format
-        thrust = float(action[0])       # Simulation: [0, 0.35] thrust force
-        roll = float(action[1])  # Simulation: [-1, 1] normalized torque
-        pitch = float(action[2]) # Simulation: [-1, 1] normalized torque  
-        yaw = float(action[3])   # Simulation: [-1, 1] normalized torque
+        thrust = np.clip(float(action[0]), 0.0, 0.35)      # Simulation: [0, 0.35] thrust force
+        roll = np.clip(float(action[1]), -1.0, 1.0)  # Simulation: [-1, 1] normalized torque
+        pitch = np.clip(float(action[2]), -1.0, 1.0) # Simulation: [-1, 1] normalized torque  
+        yaw = np.clip(float(action[3]), -1.0, 1.0)   # Simulation: [-1, 1] normalized torque
         
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
-        rate_max = 10.0
+        rate_max = 1.0 # very clamped for now
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
@@ -384,17 +385,16 @@ class HardwareDeploymentController:
 
 
 
-    def run_dummy_control_loop(self, duration: float = 10.0):
-        """Run a dummy control loop with a basic hover action for testing"""
-        print("\nRunning dummy hover control loop...")
+    def run_control_loop(self, duration: float, dummy_policy: bool):
+        """Run a control loop with dummy (basic hover) or actual policy based on self.num_drones"""
+        print("\nRunning control loop...")
         start_time = time.time()
         step_count = 0
 
         initial_drone_dists = []
-        action_histories = []
+        prev_action = np.zeros((4,), dtype=np.float32)
         for drone in self.drones:
             initial_drone_dists.append(np.linalg.norm(drone.position - self.target_pos))
-            action_histories.append(np.zeros((4, 4), dtype=np.float32))
 
         log_path = os.path.join(os.path.dirname(__file__), "drone_obs.log")
         
@@ -410,27 +410,38 @@ class HardwareDeploymentController:
                             self.target_pos, 
                             self.drones,
                             initial_drone_dists[i],
-                            action_histories[i]
+                            prev_action
                         )
                         observations.append(obs_flat)
                     
-                    # Send hover action to all drones, can test different values, should hover at ~0.26487
-                    for i, drone in enumerate(self.drones):
+                    # Dummy hover policy
+                    if dummy_policy:
                         hover_thrust = 0.26487
+                        single_action = np.array([hover_thrust, 0.0, 0.0, 0.0])
+                        action = np.tile(single_action, self.num_drones)
+                    else:
+                        observations = np.array(observations, dtype=np.float32)
+                        if self.num_drones > 1:
+                            # Custom MAPPO model for two drones
+                            obs_per_drone = observations.reshape((self.num_drones, observations.shape))
+                            action = self.agent(obs_per_drone).reshape((-1,))
+                        else:
+                            # Brax model for one drone
+                            action, _ = self.agent(observations, jax.random.PRNGKey(0))
+                            action = np.array(action).reshape((-1,))
+                        
+                    # Send action(s) to drone(s)
+                    for i, drone in enumerate(self.drones):
+                        drone_action = action[4 * i : 4 * (i+1)]
                         # Experimentally, the actual hover thrust is less than the mujoco hover thrust
-                        test_hover_thrust = hover_thrust * 0.8
-                        action = np.array([test_hover_thrust, 0.0, 0.0, 0.0])
-                        drone.send_action(action)
-
-                        # Update action history
-                        action_histories[i][:-1] = action_histories[i][1:]
-                        action_histories[i][-1] = action
-
+                        drone_action[0] *= 0.8
+                        drone.send_action(drone_action)
+                    
+                    # Update action history
+                    prev_action = action
 
                     # Logs
                     for i, drone in enumerate(self.drones):
-
-                        # Log observations
                         pos, vel, ang_vel, rot_mat, rel_pos_body, lin_vel_body, rel_drones, _ = obs_tuple
                         log_file.write(
                             f"Step {step_count}, Drone {i+1}, "
@@ -441,23 +452,9 @@ class HardwareDeploymentController:
                             f"RelPosBody={rel_pos_body}, "
                             f"LinVelBody={lin_vel_body}, "
                             f"RelDronePosBody={rel_drones}, "
-                            f"ActionHistory={action_histories[i]}\n"
+                            f"ActionHistory={prev_action}\n"
                         )
                         log_file.flush()
-
-                    # Log action that agent would have taken (self.agent can be single or multi inference fn)
-                    observations = np.array(observations, dtype=np.float32)
-                    # Messy temporary fix: adjust obs for multi-agent case
-                    if self.num_drones > 1:
-                        obs_per_drone = observations.reshape((self.num_drones, observations.shape))
-                        agent_actions = self.agent(obs_per_drone).reshape((-1,))
-                    else:
-                        obs_per_drone = observations
-                        action, _ = self.agent(obs_per_drone, jax.random.PRNGKey(0))
-                        agent_actions = np.array(action).reshape((-1,))
-
-                    log_file.write(f"Step {step_count}, Agent(s) would have taken action: {agent_actions}\n")
-                    log_file.write("-------------\n")
                         
                     step_count += 1
                     
@@ -482,93 +479,6 @@ class HardwareDeploymentController:
             print(f"  Steps: {step_count}")
             print(f"  Average rate: {step_count/elapsed_total:.1f} Hz")
 
-              
-    # TODO: ADJUST FOR FLAX, CURRENTLY TORCH (+ observation changes)
-    # def run_control_loop(self, duration: float = 30.0, verbose: bool = True):
-    #     """
-    #     Run the main control loop
-        
-    #     Parameters
-    #     ----------
-    #     duration : float
-    #         How long to run in seconds
-    #     verbose : bool
-    #         Whether to print status updates
-    #     """
-    #     print("\n" + "="*50)
-    #     print("STARTING CONTROL LOOP")
-    #     print("="*50)
-    #     print(f"Target position: {self.target_pos}")
-    #     print(f"Duration: {duration}s")
-    #     print(f"Control rate: {self.control_rate} Hz")
-    #     print("\nPress Ctrl+C to stop")
-    #     print("="*50 + "\n")
-        
-    #     start_time = time.time()
-    #     step_count = 0
-        
-    #     try:
-    #         while (time.time() - start_time) < duration:
-    #             loop_start = time.time()
-                
-    #             # Collect observations from all drones
-    #             observations = []
-    #             for drone in self.drones:
-    #                 obs = drone.get_observation(self.target_pos, self.drones)
-    #                 observations.append(obs)
-                    
-    #             # Stack observations for multi-agent case
-    #             if self.num_drones > 1:
-    #                 obs_array = np.concatenate(observations)
-    #             else:
-    #                 obs_array = observations[0]
-                    
-    #             # Get action from policy (deterministic for deployment)
-    #             with torch.no_grad():
-    #                 action, _, _ = self.agent.sample_action(obs_array, deterministic=True)
-                    
-    #             # Send actions to drones
-    #             if self.num_drones > 1:
-    #                 # Split actions for each drone
-    #                 for i, drone in enumerate(self.drones):
-    #                     drone_action = action[i*4:(i+1)*4]
-    #                     drone.send_action(drone_action)
-    #             else:
-    #                 self.drones[0].send_action(action)
-                    
-    #             # Verbose output
-    #             if verbose and step_count % 50 == 0:  # Print every 0.5s at 100Hz
-    #                 elapsed = time.time() - start_time
-    #                 print(f"[{elapsed:.1f}s] Step {step_count}")
-    #                 for i, drone in enumerate(self.drones):
-    #                     pos = drone.position
-    #                     dist = np.linalg.norm(pos - self.target_pos)
-    #                     print(f"  Drone {i}: pos={pos}, dist to target={dist:.3f}m")
-                        
-    #             step_count += 1
-                
-    #             # Sleep to maintain control rate
-    #             elapsed = time.time() - loop_start
-    #             if elapsed < self.dt:
-    #                 time.sleep(self.dt - elapsed)
-                    
-    #     except KeyboardInterrupt:
-    #         print("\n\nControl loop interrupted by user")
-            
-    #     finally:
-    #         # Send zero commands and disconnect
-    #         print("\nShutting down...")
-    #         for drone in self.drones:
-    #             if drone.connected:
-    #                 drone.send_action(np.zeros(4))
-    #         time.sleep(0.2)
-            
-    #         elapsed_total = time.time() - start_time
-    #         print(f"\nControl loop completed:")
-    #         print(f"  Duration: {elapsed_total:.1f}s")
-    #         print(f"  Steps: {step_count}")
-    #         print(f"  Average rate: {step_count/elapsed_total:.1f} Hz")
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -589,21 +499,14 @@ def main():
         type=str,
         nargs='+',
         required=True,
-        help="Crazyflie URI(s) for connection (e.g., radio://0/80/2M/E7E7E7E7E7)"
-    )
-    
-    parser.add_argument(
-        "--num_drones",
-        type=int,
-        default=None,
-        help="Number of drones (default: inferred from number of URIs)"
+        help="Crazyflie URI(s) for connection (e.g., radio://0/80/2M/E7E7E7E7E7), determines number of drones"
     )
     
     parser.add_argument(
         "--target",
         type=float,
         nargs=3,
-        default=[0.0, 0.0, 1.0],
+        default=[0.0, 0.5, 0.5],
         help="Target position [x y z] in meters (default: 0 0 1)"
     )
     
@@ -622,19 +525,16 @@ def main():
     )
     
     parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress verbose output during control loop"
+        "--dummy_policy",
+        type=bool,
+        default=False,
+        help="Run a dummy hover policy on control loop"
     )
     
     args = parser.parse_args()
     
     # Determine number of drones
-    num_drones = args.num_drones if args.num_drones else len(args.uri)
-    if num_drones != len(args.uri):
-        print(f"Warning: num_drones ({num_drones}) doesn't match number of URIs ({len(args.uri)})")
-        print(f"Using {len(args.uri)} URIs provided")
-        num_drones = len(args.uri)
+    num_drones = len(args.uri)
 
     # Configure model path based on num_drones
     if num_drones > 1:
@@ -666,9 +566,9 @@ def main():
     
     try:
         # Run control loop
-        # TODO; Replace with actual model
-        controller.run_dummy_control_loop(
-            duration=args.duration
+        controller.run_control_loop(
+            duration=args.duration,
+            dummy_policy=args.dummy_policy
         )
     finally:
         # Ensure cleanup
