@@ -275,7 +275,7 @@ class CrazyflieHardwareInterface:
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
-        rate_max = 0.5
+        rate_max = 1.0
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
@@ -534,7 +534,7 @@ def main():
         "--target",
         type=float,
         nargs=3,
-        default=[0.0, 0.0, 1.0],
+        default=[0.0, 0.5, 0.5],
         help="Target position [x y z] in meters"
     )
     
