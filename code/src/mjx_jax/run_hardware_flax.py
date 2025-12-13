@@ -259,9 +259,15 @@ class CrazyflieHardwareInterface:
         if not self.connected:
             print(f"Drone {self.drone_id} not connected, cannot send action")
             return
+        
+        # NOTE: The MuJoCo menagerie model we tested with has its control ranges as somewhat arbitrary.
+        # As such, we have experimentally adjusted the controls here (thrust scaling and deg/s clamping)
             
         # Extract action components from simulation format
         thrust = np.clip(float(action[0]), 0.0, 0.35)      # Simulation: [0, 0.35] thrust force
+        # Experimentally, the actual hover thrust is less than the mujoco hover thrust
+        thrust *= 0.8
+        
         roll = np.clip(float(action[1]), -1.0, 1.0)  # Simulation: [-1, 1] normalized torque
         pitch = np.clip(float(action[2]), -1.0, 1.0) # Simulation: [-1, 1] normalized torque  
         yaw = np.clip(float(action[3]), -1.0, 1.0)   # Simulation: [-1, 1] normalized torque
@@ -269,7 +275,7 @@ class CrazyflieHardwareInterface:
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
-        rate_max = 1.0 # very clamped for now
+        rate_max = 0.5
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
@@ -385,7 +391,13 @@ class HardwareDeploymentController:
 
 
 
-    def run_control_loop(self, duration: float, dummy_policy: bool):
+    def run_control_loop(
+            self, 
+            duration: float, 
+            dummy_policy: bool, 
+            bound_range: float = 2.0,
+            land_at_time_left: float = 2.0,
+        ):
         """Run a control loop with dummy (basic hover) or actual policy based on self.num_drones"""
         print("\nRunning control loop...")
         start_time = time.time()
@@ -413,9 +425,27 @@ class HardwareDeploymentController:
                             prev_action
                         )
                         observations.append(obs_flat)
-                    
-                    # Dummy hover policy
-                    if dummy_policy:
+
+                    # Command override check
+                    # When the run is almost over or we are out of bounds, send a sub-hover command to land
+                    time_left = duration - (time.time() - start_time)
+
+                    safety_triggered = False
+                    for drone in self.drones:
+                        if np.any(np.abs(drone.position) > bound_range):
+                            safety_triggered = True
+                            break
+
+                    if time_left < land_at_time_left:
+                        safety_triggered = True
+
+                    # Action selection
+                    if safety_triggered:
+                        # Force safe control for all drones
+                        safe_action = np.array([0.2, 0.0, 0.0, 0.0], dtype=np.float32)
+                        action = np.tile(safe_action, self.num_drones)
+                    elif dummy_policy:
+                        # Dummy hover policy
                         hover_thrust = 0.26487
                         single_action = np.array([hover_thrust, 0.0, 0.0, 0.0])
                         action = np.tile(single_action, self.num_drones)
@@ -433,8 +463,6 @@ class HardwareDeploymentController:
                     # Send action(s) to drone(s)
                     for i, drone in enumerate(self.drones):
                         drone_action = action[4 * i : 4 * (i+1)]
-                        # Experimentally, the actual hover thrust is less than the mujoco hover thrust
-                        drone_action[0] *= 0.8
                         drone.send_action(drone_action)
                     
                     # Update action history
@@ -506,22 +534,8 @@ def main():
         "--target",
         type=float,
         nargs=3,
-        default=[0.0, 0.5, 0.5],
-        help="Target position [x y z] in meters (default: 0 0 1)"
-    )
-    
-    parser.add_argument(
-        "--duration",
-        type=float,
-        default=3.0,
-        help="Duration to run in seconds (default: 3)"
-    )
-    
-    parser.add_argument(
-        "--control_rate",
-        type=float,
-        default=50.0,
-        help="Control loop frequency in Hz (default: 50)"
+        default=[0.0, 0.0, 1.0],
+        help="Target position [x y z] in meters"
     )
     
     parser.add_argument(
@@ -529,6 +543,34 @@ def main():
         type=bool,
         default=False,
         help="Run a dummy hover policy on control loop"
+    )
+
+    parser.add_argument(
+        "--duration",
+        type=float,
+        default=10.0,
+        help="Duration to run in seconds"
+    )
+
+    parser.add_argument(
+        "--bound_range",
+        type=float,
+        default=2.0,
+        help="Send a sub-hover command to land if any drone exceeds this position range (meters) on any XYZ"
+    )
+
+    parser.add_argument(
+        "--land_at_time_left",
+        type=float,
+        default=2.0,
+        help="Send a sub-hover command to land when less than this much time (s) is left in the run"
+    )
+
+    parser.add_argument(
+        "--control_rate",
+        type=float,
+        default=50.0,
+        help="Control loop frequency in Hz (simulated with 50Hz in MuJoCo)"
     )
     
     args = parser.parse_args()
