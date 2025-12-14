@@ -1,4 +1,5 @@
 # Code taken from notebook for bridging to hardware
+# Might need adjustments if notebook changes (e.g. different model architecture)
 
 from typing import Tuple
 
@@ -21,12 +22,14 @@ MAX_GRAD_NORM = 0.5
 
 SEED = 42
 NUM_DRONES = 2
-POLICY_HIDDEN = [128 * NUM_DRONES, 128 * NUM_DRONES]
-VF_HIDDEN = [128 * NUM_DRONES, 128 * NUM_DRONES]
+POLICY_HIDDEN = [128, 128]
+VF_HIDDEN = [256, 256]
 
 ACTION_SIZE_PER_DRONE = 4
 PER_AGENT_OBS_DIM = 32
 PER_ENV_OBS_DIM = PER_AGENT_OBS_DIM * NUM_DRONES
+
+HOVER_THRUST = 0.26487
 
 
 class MLP(nn.Module):

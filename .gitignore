@@ -3,4 +3,4 @@ __pycache__/
 .venv
 .vscode
 /code/model_manual_step_data/
-./cache
+/code/src/hardware_model_testing/cache

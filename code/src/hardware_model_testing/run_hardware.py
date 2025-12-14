@@ -1,19 +1,19 @@
 """
 Hardware Deployment Script for Running Trained Models on Real Crazyflie Drones
 
-This script loads a trained .pt model and runs it using real-time sensor data from
+This script loads a GPU-trained model and runs it using real-time sensor data from
 physical Crazyflie drones. It interfaces with the crazyflie-lib-python library to:
 - Connect to drones via radio
 - Collect sensor data (position, velocity, orientation, etc.)
 - Run the trained policy network
 - Send computed actions to the drones
 
-Usage:
-    python run_hardware_deployment.py --model_path ../rl_models/ppo_model.pt --uri radio://0/80/2M/E7E7E7E7E7
+Usage Examples:
+    For one drone:
+    python run_hardware.py --uri radio://0/80/2M/E7E7E7E701
     
     For multiple drones:
-    python run_hardware_deployment.py --model_path ../rl_models/mappo_model.pt --num_drones 2 \
-        --uri radio://0/80/2M/E7E7E7E701 radio://0/80/2M/E7E7E7E708
+    python run_hardware.py --uri radio://0/80/2M/E7E7E7E701 radio://0/80/2M/E7E7E7E7E7
 """
 
 # Base imports
@@ -28,7 +28,6 @@ from flax.training import checkpoints
 import os
 from brax.io import model
 from brax.training.agents.ppo import networks as ppo_networks
-from typing import Literal
 
 # Crazyflie library imports
 import cflib.crtp
@@ -37,13 +36,13 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 # Custom imports
-from Actor import create_train_state, NUM_UPDATES, PER_AGENT_OBS_DIM
+from Actor import create_train_state, NUM_UPDATES, PER_AGENT_OBS_DIM, HOVER_THRUST
 
 
 class CrazyflieHardwareInterface:
     """Interface for collecting sensor data from a single Crazyflie drone"""
         
-    def __init__(self, uri: str, drone_id: int = 0):
+    def __init__(self, uri: str, drone_id: int, pos_offset: np.ndarray):
         """
         Initialize hardware interface for a single drone
         
@@ -56,6 +55,7 @@ class CrazyflieHardwareInterface:
         """
         self.uri = uri
         self.drone_id = drone_id
+        self.position_offset = pos_offset
         
         # State variables (updated by log callbacks)
         self.position = np.zeros(3, dtype=np.float32) # [x, y, z] in meters
@@ -188,8 +188,8 @@ class CrazyflieHardwareInterface:
 
         # NOTE: Need flow deck connected for XY observations
 
-        # Construct base observations (rotation as matrix and ang_vel in radians)
-        pos = self.position
+        # Add starting offset (for multiple drones, since each thinks it starts at [0, 0, 0])
+        pos = self.position + self.position_offset
 
         # Catch invalid (0-magnitude) quats
         try:
@@ -214,7 +214,7 @@ class CrazyflieHardwareInterface:
         # Relative positions to all drones (body frame, currently includes self since notebook does)
         rel_drone_positions_body = []
         for d in all_drones:
-            rel_drone = d.position - pos
+            rel_drone = d.position + d.position_offset - pos
             rel_drone_body = rotation_matrix.T @ rel_drone
             rel_drone_positions_body.append(rel_drone_body)
 
@@ -275,7 +275,7 @@ class CrazyflieHardwareInterface:
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
-        rate_max = 1.0
+        rate_max = 0.1
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
@@ -306,8 +306,9 @@ class HardwareDeploymentController:
             self, 
             model_checkpoint_path: str, 
             uris: List[str], 
-            target_pos: np.ndarray = None, 
-            control_rate: float = 50.0
+            target_pos: np.ndarray, 
+            control_rate: float,
+            drone_offset: np.ndarray,
         ):
         """
         Initialize hardware deployment controller
@@ -324,12 +325,13 @@ class HardwareDeploymentController:
             Control loop frequency in Hz
         """
         self.num_drones = len(uris)
-        self.target_pos = target_pos if target_pos is not None else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        self.target_pos = target_pos
         self.control_rate = control_rate
         self.dt = 1.0 / control_rate
         
-        # Initialize drones
-        self.drones = [CrazyflieHardwareInterface(uri, i) for i, uri in enumerate(uris)]
+        # Initialize drones with URI, ID, and pos offset (for multiple drones since they all think they start at [0,0,0])
+        drone_pos_offsets = [drone_offset * i for i in range(self.num_drones)]
+        self.drones = [CrazyflieHardwareInterface(uri, i, drone_pos_offsets[i]) for i, uri in enumerate(uris)]
         
         # Load agent (single or double)
         if self.num_drones > 1:
@@ -396,7 +398,7 @@ class HardwareDeploymentController:
             duration: float, 
             dummy_policy: bool, 
             bound_range: float = 2.0,
-            land_at_time_left: float = 2.0,
+            land_at_time_left: float = 2.0
         ):
         """Run a control loop with dummy (basic hover) or actual policy based on self.num_drones"""
         print("\nRunning control loop...")
@@ -404,9 +406,10 @@ class HardwareDeploymentController:
         step_count = 0
 
         initial_drone_dists = []
-        prev_action = np.zeros((4,), dtype=np.float32)
         for drone in self.drones:
             initial_drone_dists.append(np.linalg.norm(drone.position - self.target_pos))
+
+        prev_action = np.zeros((self.num_drones, 4), dtype=np.float32)
 
         log_path = os.path.join(os.path.dirname(__file__), "drone_obs.log")
         
@@ -415,16 +418,16 @@ class HardwareDeploymentController:
                 while (time.time() - start_time) < duration:
                     loop_start = time.time()
 
-                    observations = []
+                    observations_per_drone = []
                     obs_tuple = []
                     for i, drone in enumerate(self.drones):
                         obs_flat, obs_tuple = drone.get_observation(
                             self.target_pos, 
                             self.drones,
                             initial_drone_dists[i],
-                            prev_action
+                            prev_action[i],
                         )
-                        observations.append(obs_flat)
+                        observations_per_drone.append(obs_flat)
 
                     # Command override check
                     # When the run is almost over or we are out of bounds, send a sub-hover command to land
@@ -441,23 +444,22 @@ class HardwareDeploymentController:
 
                     # Action selection
                     if safety_triggered:
-                        # Force safe control for all drones
-                        safe_action = np.array([0.2, 0.0, 0.0, 0.0], dtype=np.float32)
+                        # Force safe control sub-hover thrust for all drones
+                        safe_thrust = HOVER_THRUST * 0.8
+                        safe_action = np.array([safe_thrust, 0.0, 0.0, 0.0], dtype=np.float32)
                         action = np.tile(safe_action, self.num_drones)
                     elif dummy_policy:
                         # Dummy hover policy
-                        hover_thrust = 0.26487
-                        single_action = np.array([hover_thrust, 0.0, 0.0, 0.0])
+                        single_action = np.array([HOVER_THRUST, 0.0, 0.0, 0.0])
                         action = np.tile(single_action, self.num_drones)
                     else:
-                        observations = np.array(observations, dtype=np.float32)
+                        observations_per_drone = np.array(observations_per_drone, dtype=np.float32)
                         if self.num_drones > 1:
                             # Custom MAPPO model for two drones
-                            obs_per_drone = observations.reshape((self.num_drones, observations.shape))
-                            action = self.agent(obs_per_drone).reshape((-1,))
+                            action = self.agent(observations_per_drone).reshape((-1,))
                         else:
                             # Brax model for one drone
-                            action, _ = self.agent(observations, jax.random.PRNGKey(0))
+                            action, _ = self.agent(observations_per_drone, jax.random.PRNGKey(0))
                             action = np.array(action).reshape((-1,))
                         
                     # Send action(s) to drone(s)
@@ -466,7 +468,7 @@ class HardwareDeploymentController:
                         drone.send_action(drone_action)
                     
                     # Update action history
-                    prev_action = action
+                    prev_action = action.reshape(self.num_drones, 4)
 
                     # Logs
                     for i, drone in enumerate(self.drones):
@@ -534,8 +536,16 @@ def main():
         "--target",
         type=float,
         nargs=3,
-        default=[0.0, 0.5, 0.5],
+        default=[0.0, 0.0, 0.5],
         help="Target position [x y z] in meters"
+    )
+
+    parser.add_argument(
+        "--starting_pos_offset",
+        type=float,
+        nargs=3,
+        default=[0.5, 0.0, 0.0],
+        help="Starting drone position offsets (for multiple drones) in meters."
     )
     
     parser.add_argument(
@@ -581,11 +591,11 @@ def main():
     # Configure model path based on num_drones
     if num_drones > 1:
         model_path = os.path.abspath(
-            os.path.join(os.getcwd(), "MAPPO_model_checkpoint")
+            os.path.join(os.getcwd(), "..", "..", "rl_models", "gpu", "MAPPO_model_checkpoint")
         )
     else:
         model_path = os.path.abspath(
-            os.path.join(os.getcwd(), "PPO_model_checkpoint.pkl")
+            os.path.join(os.getcwd(), "..", "..", "rl_models", "gpu", "PPO_brax_model_checkpoint.pkl")
         )
     
     target_pos = np.array(args.target, dtype=np.float32)
@@ -595,7 +605,8 @@ def main():
         model_checkpoint_path=model_path,
         uris=args.uri,
         target_pos=target_pos,
-        control_rate=args.control_rate
+        control_rate=args.control_rate,
+        drone_offset=np.array(args.starting_pos_offset)
     )
     
     # Connect to drones
@@ -610,7 +621,9 @@ def main():
         # Run control loop
         controller.run_control_loop(
             duration=args.duration,
-            dummy_policy=args.dummy_policy
+            dummy_policy=args.dummy_policy,
+            bound_range=args.bound_range,
+            land_at_time_left=args.land_at_time_left
         )
     finally:
         # Ensure cleanup

@@ -21,6 +21,7 @@ MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
     "rl_models", 
+    "cpu",
     "ppo_model.pt"
 )
 
@@ -28,6 +29,7 @@ MAPPO_MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
     "rl_models", 
+    "cpu",
     "mappo_model.pt"
 )
 
