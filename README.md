@@ -23,16 +23,8 @@
 | YYYY-MM-DD | Apply policy to real drones  | 🔄 In progress |
 
 ## 📂 Repo Structure
-- docs/ – Reports and slides
+- docs/ – Reports, slides, and documentation
 - code/ – Experiments, models
-- data/ – Configs, small datasets
 - results/ – Plots, tables
 - videos/ – Demo clips
-
-## 🔗 Links
-- [Google Drive Folder](#)
-- [Zotero Group Library](#)
-
----
-> Update  every two weeks with meeting slides.
 
