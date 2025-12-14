@@ -266,7 +266,7 @@ class CrazyflieHardwareInterface:
         # Extract action components from simulation format
         thrust = np.clip(float(action[0]), 0.0, 0.35)      # Simulation: [0, 0.35] thrust force
         # Experimentally, the actual hover thrust is less than the mujoco hover thrust
-        thrust *= 0.8
+        thrust *= 0.72
         
         roll = np.clip(float(action[1]), -1.0, 1.0)  # Simulation: [-1, 1] normalized torque
         pitch = np.clip(float(action[2]), -1.0, 1.0) # Simulation: [-1, 1] normalized torque  
@@ -275,7 +275,7 @@ class CrazyflieHardwareInterface:
         thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
-        rate_max = 0.1
+        rate_max = 1.0
         roll_rate_deg  = np.clip(roll  * rate_max, -rate_max, rate_max)
         pitch_rate_deg = np.clip(pitch * rate_max, -rate_max, rate_max)
         yaw_rate_deg   = np.clip(yaw   * rate_max, -rate_max, rate_max)
@@ -537,7 +537,7 @@ def main():
         "--target",
         type=float,
         nargs=3,
-        default=[0.0, 0.0, 0.5],
+        default=[1.5, 0.0, 0.3],
         help="Target position [x y z] in meters"
     )
 
