@@ -3,7 +3,6 @@ import numpy as np
 
 SCENE_PATH = os.path.join(
     os.path.dirname(__file__),
-    "..",
     "assets", 
     "bitcraze_crazyflie_2", 
     "scene.xml"
@@ -11,7 +10,6 @@ SCENE_PATH = os.path.join(
 
 MULTI_SCENE_PATH = os.path.join(
     os.path.dirname(__file__),
-    "..",
     "assets", 
     "bitcraze_crazyflie_2", 
     "scene_multi.xml"
@@ -19,6 +17,7 @@ MULTI_SCENE_PATH = os.path.join(
 
 MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
+    "..",
     "..",
     "rl_models", 
     "cpu",
@@ -28,6 +27,7 @@ MODEL_SAVE_PATH = os.path.join(
 MAPPO_MODEL_SAVE_PATH = os.path.join(
     os.path.dirname(__file__),
     "..",
+    "..",
     "rl_models", 
     "cpu",
     "mappo_model.pt"
@@ -35,7 +35,6 @@ MAPPO_MODEL_SAVE_PATH = os.path.join(
 
 LOG_FILE_PATH = os.path.join(
     os.path.dirname(__file__),
-    "..",
     "run_output", 
     "run_logs_PPO_training.log"
 )

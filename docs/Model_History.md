@@ -1,3 +1,9 @@
+# History of trained RL models
+
+Below is a timeline of trained models throghout our project, including single agent models or multi-agent models, trained with either the CPU or GPU and available in `.../rl_models`. 
+
+**Note**: We have gone through many iterations of the CPU training environment (particularly in regards to observation size / feature engineering), so many older models cannot be loaded into the `hover_target_env.py` environment. 
+
 # Step 1: Initial Testing 
 ### Trained on a single environment, basic position and velocity observation space torch.Size([64, 13])
 
@@ -100,3 +106,7 @@
     - Getting successful multi-XYZ hover might just be a compute issue at the moment, will explore more
   - Model **multi_xyz_hover_40env_2m400k** also uses 40 envs but was trained with 2.4 mil steps per env
     - Better results, but still not ideal
+
+# Step 6: GPU Training
+
+After seeing the long CPU training times, we adjusted the the GPU training notebook, producing the single-agent PPO model/checkpoint **PPO_brax_model_checkpoint.pkl** and the two-drone trained MAPPO model/checkpoint **MAPPO_model_checkpoint**. These models can be (compressed) and uploaded into the notebook for testing.

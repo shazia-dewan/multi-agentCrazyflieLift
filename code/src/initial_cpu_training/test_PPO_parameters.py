@@ -13,7 +13,6 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 # Result directory for output files
 RESULTS_DIR = os.path.join(
     os.path.dirname(__file__),
-    "..",
     "rl_test_results"
 )
 

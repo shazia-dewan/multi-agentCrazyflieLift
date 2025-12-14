@@ -2,5 +2,5 @@ __pycache__/
 .DS_Store
 .venv
 .vscode
-/code/model_manual_step_data/
+/code/src/initial_cpu_training/model_manual_step_data/
 /code/src/hardware_model_testing/cache

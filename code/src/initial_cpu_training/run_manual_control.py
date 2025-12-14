@@ -257,7 +257,7 @@ if __name__ == "__main__":
 
 
     # Save manual steps to pickle file
-    out_dir = os.path.join(os.path.dirname(__file__), "..", "model_manual_step_data")
+    out_dir = os.path.join(os.path.dirname(__file__), "model_manual_step_data")
     os.makedirs(out_dir, exist_ok=True)
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = os.path.join(out_dir, f"manual_ep_reward_{total_reward:.2f}_{timestamp}.pkl")

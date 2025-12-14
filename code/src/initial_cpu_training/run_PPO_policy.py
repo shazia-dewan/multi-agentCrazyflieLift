@@ -218,7 +218,9 @@ if __name__ == "__main__":
             model_path = os.path.join(
                 os.path.dirname(__file__),
                 "..",
+                "..",
                 "rl_models", 
+                "cpu",
                 f"{args.load_model}.pt"
             )
         print(f"Loading model from: {model_path}")
@@ -259,7 +261,7 @@ if __name__ == "__main__":
     rows_formatted = [[r[0], r[1]] + [f"{s:.4f}" for s in r[2:]] for r in rows]
 
     # Save feature importance results to a CSV
-    out_dir = os.path.join(os.path.dirname(__file__), "..", "run_output")
+    out_dir = os.path.join(os.path.dirname(__file__), "run_output")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "feature_importance.csv")
 

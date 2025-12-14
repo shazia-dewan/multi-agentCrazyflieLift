@@ -100,7 +100,9 @@ def main():
     model_path = os.path.join(
         os.path.dirname(__file__),
         "..",
+        "..",
         "rl_models", 
+        "cpu",
         f"{model_name}.pt"
     )
     agent.load(model_path)
