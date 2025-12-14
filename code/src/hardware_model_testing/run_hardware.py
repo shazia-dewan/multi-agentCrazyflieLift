@@ -419,7 +419,7 @@ class HardwareDeploymentController:
                     loop_start = time.time()
 
                     observations_per_drone = []
-                    obs_tuple = []
+                    obs_tuples = []
                     for i, drone in enumerate(self.drones):
                         obs_flat, obs_tuple = drone.get_observation(
                             self.target_pos, 
@@ -428,6 +428,7 @@ class HardwareDeploymentController:
                             prev_action[i],
                         )
                         observations_per_drone.append(obs_flat)
+                        obs_tuples.append(obs_tuple)
 
                     # Command override check
                     # When the run is almost over or we are out of bounds, send a sub-hover command to land
@@ -472,7 +473,7 @@ class HardwareDeploymentController:
 
                     # Logs
                     for i, drone in enumerate(self.drones):
-                        pos, vel, ang_vel, rot_mat, rel_pos_body, lin_vel_body, rel_drones, _ = obs_tuple
+                        pos, vel, ang_vel, rot_mat, rel_pos_body, lin_vel_body, rel_drones, _ = obs_tuples[i]
                         log_file.write(
                             f"Step {step_count}, Drone {i+1}, "
                             f"Pos={pos}, "
@@ -482,7 +483,7 @@ class HardwareDeploymentController:
                             f"RelPosBody={rel_pos_body}, "
                             f"LinVelBody={lin_vel_body}, "
                             f"RelDronePosBody={rel_drones}, "
-                            f"ActionHistory={prev_action}\n"
+                            f"ActionHistory={prev_action[0]}\n"
                         )
                         log_file.flush()
                         
