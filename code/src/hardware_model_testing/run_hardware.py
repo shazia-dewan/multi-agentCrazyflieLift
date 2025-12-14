@@ -412,6 +412,8 @@ class HardwareDeploymentController:
         prev_action = np.zeros((self.num_drones, 4), dtype=np.float32)
 
         log_path = os.path.join(os.path.dirname(__file__), "drone_obs.log")
+
+        safety_triggered = False
         
         try:
             with open(log_path, "w") as log_file:
@@ -433,15 +435,13 @@ class HardwareDeploymentController:
                     # Command override check
                     # When the run is almost over or we are out of bounds, send a sub-hover command to land
                     time_left = duration - (time.time() - start_time)
-
-                    safety_triggered = False
+                    if time_left < land_at_time_left:
+                        safety_triggered = True
+                    
                     for drone in self.drones:
                         if np.any(np.abs(drone.position) > bound_range):
                             safety_triggered = True
                             break
-
-                    if time_left < land_at_time_left:
-                        safety_triggered = True
 
                     # Action selection
                     if safety_triggered:
