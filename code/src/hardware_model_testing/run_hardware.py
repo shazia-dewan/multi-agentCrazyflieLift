@@ -518,10 +518,10 @@ def main():
         epilog="""
             Examples:
             Single drone:
-                python run_hardware_deployment.py --num_drones 1 --uri radio://0/100/2M/E7E7E7E7E7
+                python run_hardware_deployment.py --uri radio://0/100/2M/E7E7E7E7E7
             
             Multiple drones:
-                python run_hardware_deployment.py --num_drones 2 --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8
+                python run_hardware_deployment.py --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8
         """
     )
     
