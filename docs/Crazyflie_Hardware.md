@@ -1,6 +1,6 @@
 # Hardware Deployment Quick Start
 
-Quick reference for running trained models on real Crazyflie drones.
+Quick reference for running trained models on real Crazyflie drones. The hardware file can run either the PPO (single-drone) or MAPPO (two-drone) policies, both coming from the GPU training notebook. While we trained PyTorch models with the CPU (`.pt` models), these models were during early testing and are not supported by the hardware runner. 
 
 ## Connection to the Crazyflie drones
 ### Requirements:

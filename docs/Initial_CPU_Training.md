@@ -1,6 +1,6 @@
 # Explanation of `.../initial_cpu_training` folder
 
-Early on in this project, we ran training, hyperparameter tests, etc... for a CPU-based environment `hover_target_env.py`. We later switched to GPU-based training (`.../gpu_training`) and stopped working on the CPU side of things. As such, the CPU side of things is still in a working state and does not reflect the latest environment and training changes in the GPU training notebook (e.g. environment observations and rewards). Since some of the files may still be helpful, they have not been deleted, and are explained here.
+Early on in this project, we ran training, hyperparameter tests, etc... for a CPU-based environment `hover_target_env.py`. We later switched to GPU-based training (`.../gpu_training`) and stopped working on the CPU side of things. As such, **the CPU side of things is still in a working state** and does not reflect the latest environment and training changes in the GPU training notebook (e.g. environment observations and rewards). Since some of the files may still be helpful, they have not been deleted, and are explained here.
 
 ## Training & Evaluation
 

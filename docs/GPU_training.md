@@ -20,7 +20,7 @@ Since Jax/JIT traces operations and builds a computation graph, we want to keep 
 
 # Google Collab Notebook
 
-Attached in the repo as `MARL.ipynb`, builds a MuJoCo playground environment and provides options to run single agent PPO with Brax or 2-drone MAPPO with a custom implementation. Both methods can be run with 1 or 2 drones but 2-drone PPO is essentially just single-agent RL with a centralized "dispatcher" controlling both drones, and 1-drone MAPPO reduces to PPO. The notebook relies on the MuJoCo 1 and/or 2 drone scenes, which can be found under the `./gpu_training` foler `assets_mjx`. This folder can be uploaded to Google drive which can then be mounted in the notebook (avoids re-uploading each time) or the folder can compressed to a zip folder and uploaded manually in the notebook, both options are available and outlined.
+See notebook in `.../gpu_training`, it builds a MuJoCo playground environment and provides options to run single agent PPO with Brax or 2-drone MAPPO with a custom implementation. Both methods can be run with 1 or 2 drones but 2-drone PPO is essentially just single-agent RL with a centralized "dispatcher" controlling both drones, and 1-drone MAPPO reduces to PPO. The notebook relies on the MuJoCo 1 and/or 2 drone scenes, which can also be found under the `.../gpu_training` folder `assets_mjx`. This folder can be uploaded to Google drive which can then be mounted in the notebook (avoids re-uploading each time) or the folder can compressed to a zip folder and uploaded manually in the notebook, both options are available and outlined.
 
 # Resources
 
