@@ -37,6 +37,13 @@ from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
 # Custom imports
 from Actor import create_train_state, NUM_UPDATES, PER_AGENT_OBS_DIM, HOVER_THRUST
+from motive_frame import motive_to_policy_position, motive_to_policy_quaternion
+from mocap_stream import NatNetPoseStream
+
+# send_action maps sim force [0, 0.35] then scales down for the real motors.
+# Dummy hover must invert this or the drone only skims the floor (~55% PWM).
+HARDWARE_THRUST_SCALE = 0.72
+SIM_THRUST_MAX = 0.35
 
 
 class CrazyflieHardwareInterface:
@@ -56,12 +63,15 @@ class CrazyflieHardwareInterface:
         self.uri = uri
         self.drone_id = drone_id
         self.position_offset = pos_offset
+        self.use_mocap = False
         
-        # State variables (updated by log callbacks)
+        # State variables (updated by log callbacks, or OptiTrack when use_mocap)
         self.position = np.zeros(3, dtype=np.float32) # [x, y, z] in meters
         self.quaternion = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32) # [qx, qy, qz, qw]
         self.velocity = np.zeros(3, dtype=np.float32) # [vx, vy, vz] in m/s
         self.angular_velocity = np.zeros(3, dtype=np.float32) # [gx, gy, gz] in radians
+        self._mocap_prev_pos = None
+        self._mocap_prev_t = None
         
         self.connected = False
         self.scf = None
@@ -74,6 +84,15 @@ class CrazyflieHardwareInterface:
             self.scf.open_link()
             self.connected = True
             print(f"✓ Drone {self.drone_id} connected")
+
+            # Flow deck pose drifts if the drone was moved after power-on.
+            # Absolute x/y then trips bound_range and the script sends sub-hover
+            # instead of the policy (looks like sliding, never climbing).
+            self.scf.cf.param.set_value("kalman.resetEstimation", "1")
+            time.sleep(0.1)
+            self.scf.cf.param.set_value("kalman.resetEstimation", "0")
+            print(f"  Reset Kalman estimator; keep the drone still for 2s")
+            time.sleep(2.0)
             
             # Set up logging configuration
             self._setup_logging()
@@ -141,6 +160,15 @@ class CrazyflieHardwareInterface:
         update values that are present.
         """
         for key, value in data.items():
+            if self.use_mocap:
+                if key == "gyro.x":
+                    self.angular_velocity[0] = np.deg2rad(value)
+                elif key == "gyro.y":
+                    self.angular_velocity[1] = np.deg2rad(value)
+                elif key == "gyro.z":
+                    self.angular_velocity[2] = np.deg2rad(value)
+                continue
+
             if key == 'stateEstimate.x': self.position[0] = value
             elif key == 'stateEstimate.y': self.position[1] = value
             elif key == 'stateEstimate.z': self.position[2] = value
@@ -157,6 +185,26 @@ class CrazyflieHardwareInterface:
             elif key == 'gyro.x': self.angular_velocity[0] = np.deg2rad(value)
             elif key == 'gyro.y': self.angular_velocity[1] = np.deg2rad(value)
             elif key == 'gyro.z': self.angular_velocity[2] = np.deg2rad(value)
+
+    def apply_mocap_pose(
+        self,
+        xyz_motive: np.ndarray,
+        quat_xyzw_motive: np.ndarray,
+        timestamp: float,
+        flip_x: bool,
+        flip_y: bool,
+    ) -> None:
+        """Overwrite world pose from Motive (Y-up) after converting to policy Z-up."""
+        pos = motive_to_policy_position(xyz_motive, flip_x=flip_x, flip_y=flip_y)
+        quat = motive_to_policy_quaternion(quat_xyzw_motive, flip_x=flip_x, flip_y=flip_y)
+        if self._mocap_prev_pos is not None and self._mocap_prev_t is not None:
+            dt = timestamp - self._mocap_prev_t
+            if dt > 1e-4:
+                self.velocity = ((pos - self._mocap_prev_pos) / dt).astype(np.float32)
+        self.position = pos
+        self.quaternion = quat
+        self._mocap_prev_pos = pos.copy()
+        self._mocap_prev_t = timestamp
 
         
     def get_observation(
@@ -264,15 +312,14 @@ class CrazyflieHardwareInterface:
         # As such, we have experimentally adjusted the controls here (thrust scaling and deg/s clamping)
             
         # Extract action components from simulation format
-        thrust = np.clip(float(action[0]), 0.0, 0.35)      # Simulation: [0, 0.35] thrust force
-        # Experimentally, the actual hover thrust is less than the mujoco hover thrust
-        thrust *= 0.72
+        thrust = np.clip(float(action[0]), 0.0, SIM_THRUST_MAX)
+        thrust *= HARDWARE_THRUST_SCALE
         
         roll = np.clip(float(action[1]), -1.0, 1.0)  # Simulation: [-1, 1] normalized torque
         pitch = np.clip(float(action[2]), -1.0, 1.0) # Simulation: [-1, 1] normalized torque  
         yaw = np.clip(float(action[3]), -1.0, 1.0)   # Simulation: [-1, 1] normalized torque
         
-        thrust_percent = np.clip((thrust / 0.35) * 100.0, 0.0, 100.0)
+        thrust_percent = np.clip((thrust / SIM_THRUST_MAX) * 100.0, 0.0, 100.0)
         
         # Map [-1, 1] limits to deg/s limits for safety
         rate_max = 1.0
@@ -309,6 +356,10 @@ class HardwareDeploymentController:
             target_pos: np.ndarray, 
             control_rate: float,
             drone_offset: np.ndarray,
+            mocap_stream: NatNetPoseStream | None = None,
+            mocap_rb_ids: List[int] | None = None,
+            mocap_flip_x: bool = False,
+            mocap_flip_y: bool = False,
         ):
         """
         Initialize hardware deployment controller
@@ -332,6 +383,13 @@ class HardwareDeploymentController:
         # Initialize drones with URI, ID, and pos offset (for multiple drones since they all think they start at [0,0,0])
         drone_pos_offsets = [drone_offset * i for i in range(self.num_drones)]
         self.drones = [CrazyflieHardwareInterface(uri, i, drone_pos_offsets[i]) for i, uri in enumerate(uris)]
+        self.mocap_stream = mocap_stream
+        self.mocap_rb_ids = mocap_rb_ids or []
+        self.mocap_flip_x = mocap_flip_x
+        self.mocap_flip_y = mocap_flip_y
+        if self.mocap_stream is not None:
+            for drone in self.drones:
+                drone.use_mocap = True
         
         # Load agent (single or double)
         if self.num_drones > 1:
@@ -405,6 +463,17 @@ class HardwareDeploymentController:
         start_time = time.time()
         step_count = 0
 
+        if self.mocap_stream is not None:
+            if len(self.mocap_rb_ids) != self.num_drones:
+                raise ValueError("Pass one --mocap-rb-id per URI (Motive Streaming ID).")
+            for rb_id in self.mocap_rb_ids:
+                self.mocap_stream.wait_for_pose(rb_id)
+            self._apply_mocap_to_drones()
+            print(
+                f"Mocap pose locked at {self.drones[0].position}; "
+                f"policy target {self.target_pos}"
+            )
+
         initial_drone_dists = []
         for drone in self.drones:
             initial_drone_dists.append(np.linalg.norm(drone.position - self.target_pos))
@@ -419,6 +488,8 @@ class HardwareDeploymentController:
             with open(log_path, "w") as log_file:
                 while (time.time() - start_time) < duration:
                     loop_start = time.time()
+                    if self.mocap_stream is not None:
+                        self._apply_mocap_to_drones()
 
                     observations_per_drone = []
                     obs_tuples = []
@@ -450,8 +521,9 @@ class HardwareDeploymentController:
                         safe_action = np.array([safe_thrust, 0.0, 0.0, 0.0], dtype=np.float32)
                         action = np.tile(safe_action, self.num_drones)
                     elif dummy_policy:
-                        # Dummy hover policy
-                        single_action = np.array([HOVER_THRUST, 0.0, 0.0, 0.0])
+                        # Invert HARDWARE_THRUST_SCALE so dummy hover is sim hover on the motors.
+                        dummy_thrust = min(SIM_THRUST_MAX, HOVER_THRUST / HARDWARE_THRUST_SCALE)
+                        single_action = np.array([dummy_thrust, 0.0, 0.0, 0.0])
                         action = np.tile(single_action, self.num_drones)
                     else:
                         observations_per_drone = np.array(observations_per_drone, dtype=np.float32)
@@ -510,6 +582,22 @@ class HardwareDeploymentController:
             print(f"  Steps: {step_count}")
             print(f"  Average rate: {step_count/elapsed_total:.1f} Hz")
 
+    def _apply_mocap_to_drones(self) -> None:
+        for drone, rb_id in zip(self.drones, self.mocap_rb_ids):
+            packed = self.mocap_stream.get_raw_pose(rb_id)
+            if packed is None:
+                continue
+            xyz_m, quat_m, valid, ts = packed
+            if not valid:
+                continue
+            drone.apply_mocap_pose(
+                xyz_m,
+                quat_m,
+                ts,
+                flip_x=self.mocap_flip_x,
+                flip_y=self.mocap_flip_y,
+            )
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -520,8 +608,11 @@ def main():
             Single drone:
                 python run_hardware_deployment.py --uri radio://0/100/2M/E7E7E7E7E7
             
-            Multiple drones:
-                python run_hardware_deployment.py --uri radio://0/100/2M/E7E7E7E7E7 radio://0/100/2M/E7E7E7E7E8
+            Single drone with OptiTrack:
+                python run_hardware.py --uri radio://0/80/2M/E7E7E7E703 --mocap \\
+                    --mocap-server 192.168.x.x --mocap-client 192.168.y.y \\
+                    --mocap-rb-id 81 --mocap-sdk-dir /path/to/NatNetSDK/Samples \\
+                    --target 0 0 0.3 --starting_pos_offset 0 0 0 --duration 5
         """
     )
     
@@ -538,7 +629,8 @@ def main():
         type=float,
         nargs=3,
         default=[1.5, 0.0, 0.3],
-        help="Target position [x y z] in meters"
+        help="Target position [x y z] in meters (policy frame). With mocap, this is "
+             "absolute Motive-converted position, not 'hover here'."
     )
 
     parser.add_argument(
@@ -583,6 +675,51 @@ def main():
         default=50.0,
         help="Control loop frequency in Hz (simulated with 50Hz in MuJoCo)"
     )
+    parser.add_argument(
+        "--mocap",
+        action="store_true",
+        help="Use OptiTrack NatNet pose instead of Flow-deck x/y/z and quaternion",
+    )
+    parser.add_argument(
+        "--mocap-server",
+        type=str,
+        default=None,
+        help="Motive PC IP (NatNet server), same as PythonSample.py",
+    )
+    parser.add_argument(
+        "--mocap-client",
+        type=str,
+        default=None,
+        help="This machine's IP (NatNet client), same as PythonSample.py",
+    )
+    parser.add_argument(
+        "--mocap-multicast",
+        action="store_true",
+        help="Use multicast (default is unicast)",
+    )
+    parser.add_argument(
+        "--mocap-sdk-dir",
+        type=str,
+        default=None,
+        help="Folder containing NatNetClient.py (SDK Samples or PythonClient)",
+    )
+    parser.add_argument(
+        "--mocap-rb-id",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Motive rigid-body Streaming ID, one per --uri (see Properties)",
+    )
+    parser.add_argument(
+        "--mocap-flip-x",
+        action="store_true",
+        help="Flip policy X after Y-up conversion if the cage axis is mirrored",
+    )
+    parser.add_argument(
+        "--mocap-flip-y",
+        action="store_true",
+        help="Flip policy Y after Y-up conversion if the cage axis is mirrored",
+    )
     
     args = parser.parse_args()
     
@@ -600,6 +737,31 @@ def main():
         )
     
     target_pos = np.array(args.target, dtype=np.float32)
+
+    mocap_stream = None
+    mocap_rb_ids = None
+    if args.mocap:
+        if not args.mocap_server or not args.mocap_client:
+            print("With --mocap you must set --mocap-server and --mocap-client (same IPs as PythonSample.py)")
+            sys.exit(1)
+        if not args.mocap_rb_id:
+            print("With --mocap you must set --mocap-rb-id (Motive Streaming ID)")
+            sys.exit(1)
+        if len(args.mocap_rb_id) != num_drones:
+            print("Pass as many --mocap-rb-id values as --uri values")
+            sys.exit(1)
+        mocap_rb_ids = list(args.mocap_rb_id)
+        mocap_stream = NatNetPoseStream(
+            server_ip=args.mocap_server,
+            client_ip=args.mocap_client,
+            multicast=args.mocap_multicast,
+            sdk_dir=args.mocap_sdk_dir,
+        )
+        try:
+            mocap_stream.start()
+        except Exception as e:
+            print(f"Failed to start NatNet: {e}")
+            sys.exit(1)
     
     # Create controller
     controller = HardwareDeploymentController(
@@ -607,7 +769,11 @@ def main():
         uris=args.uri,
         target_pos=target_pos,
         control_rate=args.control_rate,
-        drone_offset=np.array(args.starting_pos_offset)
+        drone_offset=np.array(args.starting_pos_offset),
+        mocap_stream=mocap_stream,
+        mocap_rb_ids=mocap_rb_ids,
+        mocap_flip_x=args.mocap_flip_x,
+        mocap_flip_y=args.mocap_flip_y,
     )
     
     # Connect to drones
@@ -629,6 +795,8 @@ def main():
     finally:
         # Ensure cleanup
         controller.disconnect_all()
+        if mocap_stream is not None:
+            mocap_stream.shutdown()
         
         for i in range(num_drones):
             from cflib.utils.power_switch import PowerSwitch
