@@ -115,6 +115,15 @@ def train_PPO(
     print("PPO Training Complete")
 
 
+def _drone_midpoint(env: CrazyflieEnv) -> np.ndarray:
+    """Average world position of every drone in the scene."""
+    positions = [
+        env.data.qpos[i * env.qpos_per_drone : i * env.qpos_per_drone + 3]
+        for i in range(env.num_drones)
+    ]
+    return np.mean(positions, axis=0)
+
+
 ####################
 # Rendering PPO
 ####################
@@ -126,6 +135,13 @@ def render_PPO(agent: MAPPOAgent, env: CrazyflieEnv, seed: int | None = 42):
 
     total_reward = 0.0
     with mujoco.viewer.launch_passive(env.mujoco_scene, env.data) as viewer:
+        # MuJoCo tracking follows one body. Keep a free camera on the midpoint
+        # so both drones stay in frame as they leave the origin.
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        viewer.cam.distance = 2.0
+        viewer.cam.azimuth = 135
+        viewer.cam.elevation = -25
+        viewer.cam.lookat[:] = _drone_midpoint(env)
         print("\nRunning final visualization based on learned policy")
 
         # Adjust real-time render based on env frame skip and timestep
@@ -137,6 +153,7 @@ def render_PPO(agent: MAPPOAgent, env: CrazyflieEnv, seed: int | None = 42):
             obs, reward, done, _, _ = env.step(action)
             total_reward += reward
 
+            viewer.cam.lookat[:] = _drone_midpoint(env)
             viewer.sync()
             
             # Sleep the sim for real-time rendering

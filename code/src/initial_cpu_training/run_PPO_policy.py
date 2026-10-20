@@ -126,6 +126,15 @@ def render_PPO(agent: PPOAgentVec, env: CrazyflieEnv, seed: int | None = 42):
 
     total_reward = 0.0
     with mujoco.viewer.launch_passive(env.mujoco_scene, env.data) as viewer:
+        # Follow the drone. The free camera stays at the origin while the
+        # target is several meters away, so the drone leaves the frame.
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        viewer.cam.trackbodyid = mujoco.mj_name2id(
+            env.mujoco_scene, mujoco.mjtObj.mjOBJ_BODY, "cf2"
+        )
+        viewer.cam.distance = 1.5
+        viewer.cam.azimuth = 135
+        viewer.cam.elevation = -25
         print("\nRunning final visualization based on learned policy")
 
         # Adjust real-time render based on env frame skip and timestep
