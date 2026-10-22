@@ -1,10 +1,10 @@
-# Multi-Agent Reinforcement Learning on Crazyflie Drones
+# Multi-Agent Reinforcement Learning for Cooperative Path-Following and Safe Navigation on Crazyflie Drones
 
 ## 🧑 Student
-- Name: Michael O'Sullivan, Aydin Yalcinkaya
+- Name: Shazia Dewan, Sabirin Said, Samira Dayib
 - Degree: Honours BSc Computer Science, Honours BSc Computer Science
 - Supervisor: Prof. Colin Bellinger
-- Start Date: 2025-09-05
+- Start Date: 2026-09-09
 
 ## 🎯 Project Overview
 - **Goal**: Multi-agent reinforcmenet learning applied to crazyflie drones
@@ -14,13 +14,11 @@
 ## 📅 Roadmap
 | Date       | Milestone                 | Status  |
 |------------|---------------------------|---------|
-| 2025-09-12 | Environment setup         | Done ✅  |
-| 2025-09-17 | Single-agent baseline     | Done ✅  |
-| 2025-10-14 | Single-agent successful target hover in small XYZ  | Done ✅ |
-| 2025-10-20 | Reliable Single-agent hover in wide range of XYZ   | Done ✅ |
-| 2025-11-25 | Multi-agent successful target hover in wide range of XYZ (Jax Notebook)   | Done ✅ |
-| 2025-12-07 | Domain randomization for Crazyflie env   | Done ✅ |
-| 2025-12-14 | Apply policy to real drones  | Done ✅ (though with varying success) |
+| 2025-09-14 | Environment setup         | Done ✅  |
+| 2025-09-28 | Single-agent baseline, Single-agent successful target hover in small XYZ      | Done ✅  |
+| 2025-10-12 | Implement Opti-Track   | Done ✅ |
+| 2025-10-19 | Both drones flying (PPO and MAPPO) work on OptiTrack   | Done ✅ |
+| 2025-10-31 | Train sim to follow moving target on PPO   | In Progress |
 
 ## 📂 Repo Structure
 - docs/ – Reports, slides, and documentation
