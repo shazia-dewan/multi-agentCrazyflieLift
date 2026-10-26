@@ -193,6 +193,7 @@ class CrazyflieHardwareInterface:
         self.position_offset = pos_offset
         self.use_mocap = False
         self.zero_tilt = False
+        self.thrust_scale = HARDWARE_THRUST_SCALE
         
         # State variables (updated by log callbacks, or OptiTrack when use_mocap)
         self.position = np.zeros(3, dtype=np.float32) # [x, y, z] in meters
@@ -442,7 +443,7 @@ class CrazyflieHardwareInterface:
             
         # Extract action components from simulation format
         thrust = np.clip(float(action[0]), 0.0, SIM_THRUST_MAX)
-        thrust *= HARDWARE_THRUST_SCALE
+        thrust *= self.thrust_scale
         
         if self.zero_tilt:
             roll = pitch = yaw = 0.0
@@ -493,6 +494,7 @@ class HardwareDeploymentController:
             mocap_flip_x: bool = False,
             mocap_flip_y: bool = False,
             zero_tilt: bool = False,
+            thrust_scales: List[float] | None = None,
         ):
         """
         Initialize hardware deployment controller
@@ -525,6 +527,10 @@ class HardwareDeploymentController:
                 drone.use_mocap = True
         for drone in self.drones:
             drone.zero_tilt = zero_tilt
+        if thrust_scales is not None:
+            for drone, scale in zip(self.drones, thrust_scales):
+                drone.thrust_scale = scale
+        print("Thrust scale per drone: " + ", ".join(f"{d.uri}={d.thrust_scale:.2f}" for d in self.drones))
         
         # Load agent (single or double)
         if self.num_drones > 1:
@@ -657,10 +663,11 @@ class HardwareDeploymentController:
                         safe_action = np.array([safe_thrust, 0.0, 0.0, 0.0], dtype=np.float32)
                         action = np.tile(safe_action, self.num_drones)
                     elif dummy_policy:
-                        # Invert HARDWARE_THRUST_SCALE so dummy hover is sim hover on the motors.
-                        dummy_thrust = min(SIM_THRUST_MAX, HOVER_THRUST / HARDWARE_THRUST_SCALE)
-                        single_action = np.array([dummy_thrust, 0.0, 0.0, 0.0])
-                        action = np.tile(single_action, self.num_drones)
+                        # Invert each drone's thrust scale so dummy hover is sim hover on the motors.
+                        action = np.concatenate([
+                            [min(SIM_THRUST_MAX, HOVER_THRUST / drone.thrust_scale), 0.0, 0.0, 0.0]
+                            for drone in self.drones
+                        ])
                     else:
                         observations_per_drone = np.array(observations_per_drone, dtype=np.float32)
                         if self.num_drones > 1:
@@ -864,11 +871,22 @@ def main():
         action="store_true",
         help="Send 0 roll/pitch/yaw (thrust only). Use for hover tests; the policy still sets thrust.",
     )
+    parser.add_argument(
+        "--thrust-scale",
+        type=float,
+        nargs="+",
+        default=None,
+        help=f"Sim-to-motor thrust scale, one per --uri (default {HARDWARE_THRUST_SCALE} for all). "
+             "Measured hover calibration: about 0.85 for Ruby and 0.93 for Max.",
+    )
     
     args = parser.parse_args()
     
     # Determine number of drones
     num_drones = len(args.uri)
+    if args.thrust_scale is not None and len(args.thrust_scale) != num_drones:
+        print("Pass as many --thrust-scale values as --uri values")
+        sys.exit(1)
 
     # Configure model path based on num_drones
     if num_drones > 1:
@@ -919,6 +937,7 @@ def main():
         mocap_flip_x=args.mocap_flip_x,
         mocap_flip_y=args.mocap_flip_y,
         zero_tilt=args.zero_tilt,
+        thrust_scales=args.thrust_scale,
     )
     
     # Connect to drones
