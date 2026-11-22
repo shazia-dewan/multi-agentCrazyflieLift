@@ -18,7 +18,8 @@
 | 2025-09-28 | Single-agent baseline, Single-agent successful target hover in small XYZ      | Done ✅  |
 | 2025-10-12 | Implement Opti-Track   | Done ✅ |
 | 2025-10-19 | Both drones flying (PPO and MAPPO) work on OptiTrack   | Done ✅ |
-| 2025-10-31 | Train sim to follow moving target on PPO   | In Progress |
+| 2025-10-31 | Train sim to follow moving target on PPO and test on hardware  | Done ✅ |
+| 2025-11-30 | Train sim to follow moving target on MAPPO and test on hardware   | In progress |
 
 ## 📂 Repo Structure
 - docs/ – Reports, slides, and documentation
